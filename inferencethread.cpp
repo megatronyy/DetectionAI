@@ -1,0 +1,152 @@
+#include "inferencethread.h"
+#include <QElapsedTimer>
+
+InferenceThread::InferenceThread(QObject* parent) : QThread(parent) {}
+
+InferenceThread::~InferenceThread()
+{
+    stop();
+    wait();
+}
+
+YOLODetector& InferenceThread::detector() { return detector_; }
+bool InferenceThread::isVideoSource() const { return isVideo_; }
+void InferenceThread::setPaused(bool p) { paused_ = p; }
+bool InferenceThread::isRecording() const { return recording_; }
+
+bool InferenceThread::openCamera(int index)
+{
+    if (cap_.isOpened()) cap_.release();
+    cap_.open(index);
+    isVideo_ = false;
+    return cap_.isOpened();
+}
+
+bool InferenceThread::openVideo(const std::string& path)
+{
+    if (cap_.isOpened()) cap_.release();
+    cap_.open(path);
+    isVideo_ = true;
+    return cap_.isOpened();
+}
+
+void InferenceThread::stop()
+{
+    running_ = false;
+}
+
+void InferenceThread::startRecording(const std::string& path, double fps, int width, int height)
+{
+    int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+    writer_.open(path, fourcc, fps, cv::Size(width, height));
+    recording_ = writer_.isOpened();
+}
+
+void InferenceThread::stopRecording()
+{
+    recording_ = false;
+    if (writer_.isOpened()) writer_.release();
+}
+
+cv::Scalar InferenceThread::classColor(int classId)
+{
+    // Golden angle for perceptually distinct colors
+    float hue = fmod(classId * 137.508f, 180.f); // OpenCV Hue range: 0-180
+    cv::Mat hsv(1, 1, CV_8UC3, cv::Scalar((int)hue, 200, 255));
+    cv::Mat bgr;
+    cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
+    auto c = bgr.at<cv::Vec3b>(0, 0);
+    return cv::Scalar(c[0], c[1], c[2]);
+}
+
+void InferenceThread::drawDetections(cv::Mat& frame, const std::vector<Detection>& dets)
+{
+    for (const auto& d : dets) {
+        cv::Scalar color = classColor(d.classId);
+        cv::rectangle(frame, d.bbox, color, 2);
+
+        std::string label = YOLODetector::CLASS_NAMES[d.classId] +
+                            " " + cv::format("%.2f", d.confidence);
+        int baseline = 0;
+        double fontScale = 0.5;
+        int thickness = 1;
+        cv::Size textSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
+                                             fontScale, thickness, &baseline);
+
+        int top = d.bbox.y;
+        int textY = (top > textSize.height + 4) ? (top - 4) : (top + textSize.height + 4);
+
+        cv::rectangle(frame,
+            cv::Point(d.bbox.x, textY - textSize.height - 2),
+            cv::Point(d.bbox.x + textSize.width, textY + 2),
+            color, cv::FILLED);
+        cv::putText(frame, label,
+            cv::Point(d.bbox.x, textY),
+            cv::FONT_HERSHEY_SIMPLEX, fontScale,
+            cv::Scalar(0, 0, 0), thickness);
+    }
+}
+
+void InferenceThread::run()
+{
+    running_ = true;
+    QElapsedTimer fpsTimer;
+    fpsTimer.start();
+    int frameCount = 0;
+    float fps = 0;
+    int emptyCount = 0;
+
+    while (running_) {
+        if (paused_) {
+            msleep(30);
+            continue;
+        }
+
+        if (!cap_.isOpened()) {
+            msleep(100);
+            continue;
+        }
+
+        cap_ >> currentFrame_;
+        if (currentFrame_.empty()) {
+            emptyCount++;
+            if (isVideo_ && emptyCount > 5) {
+                emit inputLost("视频播放结束");
+                paused_ = true;
+                continue;
+            }
+            if (!isVideo_ && emptyCount > 30) {
+                emit inputLost("摄像头已断开");
+                paused_ = true;
+                continue;
+            }
+            msleep(10);
+            continue;
+        }
+        emptyCount = 0;
+
+        auto dets = detector_.detect(currentFrame_);
+        drawDetections(currentFrame_, dets);
+
+        if (recording_ && writer_.isOpened()) {
+            writer_ << currentFrame_;
+        }
+
+        // Deep copy QImage for thread safety
+        QImage img;
+        if (currentFrame_.channels() == 3)
+            img = QImage(currentFrame_.data, currentFrame_.cols, currentFrame_.rows,
+                         currentFrame_.step, QImage::Format_BGR888).copy();
+
+        frameCount++;
+        if (fpsTimer.elapsed() >= 1000) {
+            fps = frameCount * 1000.f / fpsTimer.elapsed();
+            frameCount = 0;
+            fpsTimer.restart();
+        }
+
+        emit frameReady(img, (int)dets.size(), fps);
+    }
+
+    if (writer_.isOpened()) writer_.release();
+}
