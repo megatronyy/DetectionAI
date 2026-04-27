@@ -16,6 +16,13 @@ bool InferenceThread::isRecording() const { return recording_; }
 void InferenceThread::setTrackingEnabled(bool e) { trackingEnabled_ = e; }
 bool InferenceThread::isTrackingEnabled() const { return trackingEnabled_; }
 void InferenceThread::resetTracker() { tracker_.reset(); }
+void InferenceThread::setLoopEnabled(bool e) { loopEnabled_ = e; }
+bool InferenceThread::isLoopEnabled() const { return loopEnabled_; }
+QSize InferenceThread::frameSize() const { return lastFrameSize_; }
+std::vector<Detection> InferenceThread::lastDetections() const {
+    std::lock_guard<std::mutex> lock(detectionsMutex_);
+    return lastDetections_;
+}
 
 bool InferenceThread::openCamera(int index)
 {
@@ -150,6 +157,11 @@ void InferenceThread::run()
         if (currentFrame_.empty()) {
             emptyCount++;
             if (isVideo_ && emptyCount > 5) {
+                if (loopEnabled_) {
+                    cap_.set(cv::CAP_PROP_POS_FRAMES, 0);
+                    emptyCount = 0;
+                    continue;
+                }
                 emit inputLost("视频播放结束");
                 paused_ = true;
                 continue;
@@ -163,8 +175,18 @@ void InferenceThread::run()
             continue;
         }
         emptyCount = 0;
+        lastFrameSize_ = QSize(currentFrame_.cols, currentFrame_.rows);
 
+        QElapsedTimer inferTimer;
+        inferTimer.start();
         auto dets = detector_.detect(currentFrame_);
+        float inferMs = (float)inferTimer.elapsed();
+
+        {
+            std::lock_guard<std::mutex> lock(detectionsMutex_);
+            lastDetections_ = dets;
+        }
+
         if (trackingEnabled_) {
             auto tracks = tracker_.update(dets);
             drawTracks(currentFrame_, tracks);
@@ -189,7 +211,10 @@ void InferenceThread::run()
             fpsTimer.restart();
         }
 
-        emit frameReady(img, (int)dets.size(), fps);
+        QMap<int,int> classCounts;
+        for (const auto& d : dets) classCounts[d.classId]++;
+
+        emit frameReady(img, (int)dets.size(), fps, inferMs, classCounts);
     }
 
     if (writer_.isOpened()) writer_.release();

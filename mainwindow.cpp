@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "classfilterdialog.h"
+#include "lang.h"
 #include <QIcon>
 #include <QToolBar>
 #include <QStatusBar>
@@ -11,12 +12,15 @@
 #include <QDebug>
 #include <QInputDialog>
 #include <QFileInfo>
+#include <QHeaderView>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowIcon(QIcon("app.ico"));
-    setWindowTitle("YOLO11 物体检测");
     resize(960, 720);
 
     setupUI();
@@ -27,26 +31,27 @@ MainWindow::MainWindow(QWidget *parent)
     QString modelPath = initSettings.value("modelPath", "yolo11n.onnx").toString();
     if (!thread_.detector().loadModel(modelPath.toStdWString())) {
         modelPath = QFileDialog::getOpenFileName(this,
-            "选择 ONNX 模型", "", "ONNX 模型 (*.onnx)");
+            Lang::s("select_model"), "", Lang::s("model_filter"));
         if (modelPath.isEmpty() || !thread_.detector().loadModel(modelPath.toStdWString())) {
-            QMessageBox::critical(this, "错误", "无法加载 ONNX 模型。");
+            QMessageBox::critical(this, Lang::s("error"), Lang::s("model_load_fail"));
             return;
         }
     }
     currentModelPath_ = modelPath;
 
-    deviceLabel_->setText(thread_.detector().isGpuEnabled() ? "GPU (CUDA)" : "CPU");
+    deviceLabel_->setText(thread_.detector().isGpuEnabled()
+        ? Lang::s("device_gpu") : Lang::s("device_cpu"));
 
     // Open default camera
     int cam = cameraCombo_->currentData().toInt();
     if (!thread_.openCamera(cam)) {
-        QMessageBox::warning(this, "警告",
-            "无法打开默认摄像头，请选择其他输入源或打开视频文件。");
+        QMessageBox::warning(this, Lang::s("cam_warn"), Lang::s("cam_open_fail"));
     }
 
     // Connect signals
     connect(&thread_, &InferenceThread::frameReady,
-            this, &MainWindow::onFrameReady);
+            this, qOverload<const QImage&, int, float, float, const QMap<int,int>&>(
+                &MainWindow::onFrameReady));
     connect(&thread_, &InferenceThread::inputLost,
             this, &MainWindow::onInputLost);
 
@@ -65,45 +70,57 @@ void MainWindow::setupUI()
     QToolBar* toolbar = addToolBar("Controls");
     toolbar->setMovable(false);
 
-    pauseBtn_ = new QPushButton("暂停");
-    screenshotBtn_ = new QPushButton("截屏");
-    recordBtn_ = new QPushButton("录制");
-    videoBtn_ = new QPushButton("打开视频");
-    networkCamBtn_ = new QPushButton("网络摄像头");
-    switchModelBtn_ = new QPushButton("切换模型");
-    classFilterBtn_ = new QPushButton("类别筛选");
-    trackingBtn_ = new QPushButton("目标追踪");
+    pauseBtn_       = new QPushButton(Lang::s("pause"));
+    screenshotBtn_  = new QPushButton(Lang::s("screenshot"));
+    recordBtn_      = new QPushButton(Lang::s("record"));
+    exportBtn_      = new QPushButton(Lang::s("export_btn"));
+    videoBtn_       = new QPushButton(Lang::s("open_video"));
+    networkCamBtn_  = new QPushButton(Lang::s("network_cam"));
+    loopBtn_        = new QPushButton(Lang::s("loop"));
+    switchModelBtn_ = new QPushButton(Lang::s("switch_model"));
+    classFilterBtn_ = new QPushButton(Lang::s("class_filter"));
+    trackingBtn_    = new QPushButton(Lang::s("tracking_off"));
+    langBtn_        = new QPushButton(Lang::s("lang_toggle"));
+
+    loopBtn_->setCheckable(true);
     trackingBtn_->setCheckable(true);
 
     cameraCombo_ = new QComboBox;
     for (int i = 0; i < 5; i++)
-        cameraCombo_->addItem(QString("摄像头 %1").arg(i), i);
+        cameraCombo_->addItem(Lang::s("camera").arg(i), i);
     cameraCombo_->setCurrentIndex(0);
 
     toolbar->addWidget(pauseBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(screenshotBtn_);
     toolbar->addWidget(recordBtn_);
+    toolbar->addWidget(exportBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(videoBtn_);
     toolbar->addWidget(networkCamBtn_);
+    toolbar->addWidget(loopBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(switchModelBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(classFilterBtn_);
     toolbar->addWidget(trackingBtn_);
     toolbar->addSeparator();
-    toolbar->addWidget(new QLabel(" 输入: "));
+    toolbar->addWidget(langBtn_);
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(Lang::s("input_source")));
     toolbar->addWidget(cameraCombo_);
 
     connect(pauseBtn_, &QPushButton::clicked, this, &MainWindow::onTogglePause);
     connect(screenshotBtn_, &QPushButton::clicked, this, &MainWindow::onScreenshot);
     connect(recordBtn_, &QPushButton::clicked, this, &MainWindow::onToggleRecord);
+    connect(exportBtn_, &QPushButton::clicked, this, &MainWindow::onExport);
     connect(videoBtn_, &QPushButton::clicked, this, &MainWindow::onOpenVideo);
     connect(networkCamBtn_, &QPushButton::clicked, this, &MainWindow::onNetworkCamera);
+    connect(loopBtn_, &QPushButton::toggled, this, &MainWindow::onToggleLoop);
     connect(switchModelBtn_, &QPushButton::clicked, this, &MainWindow::onSwitchModel);
     connect(classFilterBtn_, &QPushButton::clicked, this, &MainWindow::onClassFilter);
     connect(trackingBtn_, &QPushButton::toggled, this, &MainWindow::onToggleTracking);
+    connect(langBtn_, &QPushButton::clicked, this, &MainWindow::onToggleLanguage);
     connect(cameraCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onCameraChanged);
 
@@ -112,8 +129,7 @@ void MainWindow::setupUI()
     QHBoxLayout* sliderLayout = new QHBoxLayout(sliderWidget);
     sliderLayout->setContentsMargins(8, 4, 8, 4);
 
-    // Confidence slider
-    sliderLayout->addWidget(new QLabel("置信度:"));
+    sliderLayout->addWidget(new QLabel(Lang::s("confidence")));
     confSlider_ = new QSlider(Qt::Horizontal);
     confSlider_->setRange(1, 99);
     confSlider_->setValue(25);
@@ -127,8 +143,7 @@ void MainWindow::setupUI()
 
     sliderLayout->addSpacing(20);
 
-    // IoU slider
-    sliderLayout->addWidget(new QLabel("IoU:"));
+    sliderLayout->addWidget(new QLabel(Lang::s("iou")));
     iouSlider_ = new QSlider(Qt::Horizontal);
     iouSlider_->setRange(10, 90);
     iouSlider_->setValue(45);
@@ -160,13 +175,26 @@ void MainWindow::setupUI()
     setCentralWidget(central);
 
     // --- Status bar ---
-    fpsLabel_ = new QLabel("FPS: --");
-    detLabel_ = new QLabel("检测数: 0");
-    deviceLabel_ = new QLabel("CPU");
+    fpsLabel_    = new QLabel("FPS: --");
+    detLabel_    = new QLabel(Lang::s("det_count").arg(0));
+    inferLabel_  = new QLabel(Lang::s("infer_ms").arg(0));
+    deviceLabel_ = new QLabel(Lang::s("device_cpu"));
 
     statusBar()->addWidget(fpsLabel_);
     statusBar()->addWidget(detLabel_);
+    statusBar()->addWidget(inferLabel_);
     statusBar()->addPermanentWidget(deviceLabel_);
+
+    // --- Statistics dock ---
+    statsDock_ = new QDockWidget(Lang::s("stats_title"), this);
+    statsTable_ = new QTableWidget(0, 2, statsDock_);
+    statsTable_->setHorizontalHeaderLabels(
+        {Lang::s("stats_class"), Lang::s("stats_count")});
+    statsTable_->horizontalHeader()->setStretchLastSection(true);
+    statsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    statsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    statsDock_->setWidget(statsTable_);
+    addDockWidget(Qt::RightDockWidgetArea, statsDock_);
 }
 
 void MainWindow::loadSettings()
@@ -177,6 +205,10 @@ void MainWindow::loadSettings()
     int cam = settings.value("camera", 0).toInt();
     QSize winSize = settings.value("windowSize", QSize(960, 720)).toSize();
     bool tracking = settings.value("tracking", false).toBool();
+    bool loop = settings.value("loop", false).toBool();
+    int lang = settings.value("language", 0).toInt();
+
+    Lang::setLanguage(static_cast<Lang::Language>(lang));
 
     confSlider_->setValue((int)(conf * 100));
     iouSlider_->setValue((int)(iou * 100));
@@ -185,6 +217,8 @@ void MainWindow::loadSettings()
 
     trackingBtn_->setChecked(tracking);
     thread_.setTrackingEnabled(tracking);
+    loopBtn_->setChecked(loop);
+    thread_.setLoopEnabled(loop);
 
     QList<QVariant> classList = settings.value("enabledClasses").toList();
     QSet<int> classes;
@@ -194,6 +228,11 @@ void MainWindow::loadSettings()
 
     thread_.detector().setConfThreshold(conf);
     thread_.detector().setIouThreshold(iou);
+
+    if (settings.value("statsVisible", true).toBool())
+        statsDock_->show();
+    else
+        statsDock_->hide();
 }
 
 void MainWindow::saveSettings()
@@ -205,6 +244,9 @@ void MainWindow::saveSettings()
     settings.setValue("windowSize", size());
     settings.setValue("modelPath", currentModelPath_);
     settings.setValue("tracking", thread_.isTrackingEnabled());
+    settings.setValue("loop", thread_.isLoopEnabled());
+    settings.setValue("language", static_cast<int>(Lang::language()));
+    settings.setValue("statsVisible", statsDock_->isVisible());
 
     QList<QVariant> classList;
     for (int id : enabledClasses_) classList.append(id);
@@ -240,6 +282,12 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
     case Qt::Key_T:
         trackingBtn_->toggle();
         break;
+    case Qt::Key_L:
+        loopBtn_->toggle();
+        break;
+    case Qt::Key_E:
+        onExport();
+        break;
     case Qt::Key_F11:
         isFullScreen() ? showNormal() : showFullScreen();
         break;
@@ -254,7 +302,8 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
 
 // --- Slots ---
 
-void MainWindow::onFrameReady(const QImage& image, int detCount, float fps)
+void MainWindow::onFrameReady(const QImage& image, int detCount, float fps,
+                               float inferMs, const QMap<int,int>& classCounts)
 {
     if (image.isNull()) return;
 
@@ -262,8 +311,24 @@ void MainWindow::onFrameReady(const QImage& image, int detCount, float fps)
     videoLabel_->setPixmap(QPixmap::fromImage(image).scaled(
         videoLabel_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
-    fpsLabel_->setText(QString("FPS: %1").arg(fps, 0, 'f', 1));
-    detLabel_->setText(QString("检测数: %1").arg(detCount));
+    fpsLabel_->setText(Lang::s("fps").arg(fps, 0, 'f', 1));
+    detLabel_->setText(Lang::s("det_count").arg(detCount));
+    inferLabel_->setText(Lang::s("infer_ms").arg(inferMs, 0, 'f', 1));
+
+    // Update statistics
+    for (auto it = classCounts.begin(); it != classCounts.end(); ++it)
+        classStats_[it.key()] += it.value();
+
+    if (statsDock_->isVisible()) {
+        statsTable_->setRowCount(classStats_.size());
+        int row = 0;
+        for (auto it = classStats_.constBegin(); it != classStats_.constEnd(); ++it) {
+            statsTable_->setItem(row, 0,
+                new QTableWidgetItem(QString::fromStdString(YOLODetector::CLASS_NAMES[it.key()])));
+            statsTable_->setItem(row, 1, new QTableWidgetItem(QString::number(it.value())));
+            row++;
+        }
+    }
 }
 
 void MainWindow::onInputLost(const QString& msg)
@@ -275,7 +340,7 @@ void MainWindow::onTogglePause()
 {
     paused_ = !paused_;
     thread_.setPaused(paused_);
-    pauseBtn_->setText(paused_ ? "继续" : "暂停");
+    pauseBtn_->setText(paused_ ? Lang::s("resume") : Lang::s("pause"));
 }
 
 void MainWindow::onScreenshot()
@@ -283,34 +348,34 @@ void MainWindow::onScreenshot()
     if (lastFrame_.isNull()) return;
 
     QString defaultName = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".png";
-    QString path = QFileDialog::getSaveFileName(this, "保存截图", defaultName,
-        "图片 (*.png *.jpg *.bmp)");
+    QString path = QFileDialog::getSaveFileName(this, Lang::s("save_screenshot"),
+        defaultName, Lang::s("image_filter"));
     if (path.isEmpty()) return;
 
     if (lastFrame_.save(path))
-        statusBar()->showMessage("截图已保存: " + path, 3000);
+        statusBar()->showMessage(Lang::s("screenshot_saved") + path, 3000);
     else
-        QMessageBox::warning(this, "错误", "保存截图失败。");
+        QMessageBox::warning(this, Lang::s("error"), Lang::s("screenshot_fail"));
 }
 
 void MainWindow::onOpenVideo()
 {
-    QString path = QFileDialog::getOpenFileName(this, "打开视频", "",
-        "视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv);;所有文件 (*)");
+    QString path = QFileDialog::getOpenFileName(this, Lang::s("open_video_title"),
+        "", Lang::s("video_filter"));
     if (path.isEmpty()) return;
 
     thread_.stop();
     thread_.wait();
 
     if (!thread_.openVideo(path.toStdString())) {
-        QMessageBox::warning(this, "错误", "无法打开视频文件。");
+        QMessageBox::warning(this, Lang::s("error"), Lang::s("video_open_fail"));
         return;
     }
 
     paused_ = false;
-    pauseBtn_->setText("暂停");
+    pauseBtn_->setText(Lang::s("pause"));
     thread_.start();
-    statusBar()->showMessage("视频: " + path, 3000);
+    statusBar()->showMessage(Lang::s("video_opened") + path, 3000);
 }
 
 void MainWindow::onCameraChanged(int index)
@@ -322,15 +387,15 @@ void MainWindow::onCameraChanged(int index)
     thread_.wait();
 
     if (!thread_.openCamera(camIdx)) {
-        QMessageBox::warning(this, "错误",
-            QString("无法打开摄像头 %1。").arg(camIdx));
+        QMessageBox::warning(this, Lang::s("error"),
+            Lang::s("cam_switch_fail").arg(camIdx));
         return;
     }
 
     paused_ = false;
-    pauseBtn_->setText("暂停");
+    pauseBtn_->setText(Lang::s("pause"));
     thread_.start();
-    statusBar()->showMessage(QString("已切换到摄像头 %1").arg(camIdx), 2000);
+    statusBar()->showMessage(Lang::s("cam_switched").arg(camIdx), 2000);
 }
 
 void MainWindow::onConfChanged(int value)
@@ -351,26 +416,24 @@ void MainWindow::onToggleRecord()
 {
     if (thread_.isRecording()) {
         thread_.stopRecording();
-        recordBtn_->setText("录制");
-        statusBar()->showMessage("录制已停止", 3000);
+        recordBtn_->setText(Lang::s("record"));
+        statusBar()->showMessage(Lang::s("recording_stopped"), 3000);
     } else {
         QString defaultName = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".mp4";
-        QString path = QFileDialog::getSaveFileName(this, "保存录制", defaultName,
-            "视频 (*.mp4 *.avi)");
+        QString path = QFileDialog::getSaveFileName(this, Lang::s("save_recording"),
+            defaultName, Lang::s("video_save_filter"));
         if (path.isEmpty()) return;
 
-        // Get source dimensions
-        int width = 640, height = 480;
-        if (thread_.isVideoSource()) {
-            // Will use actual frame size in the thread
-        }
+        QSize sz = thread_.frameSize();
+        int width = sz.width() > 0 ? sz.width() : 640;
+        int height = sz.height() > 0 ? sz.height() : 480;
 
         thread_.startRecording(path.toStdString(), 30.0, width, height);
         if (thread_.isRecording()) {
-            recordBtn_->setText("停止录制");
-            statusBar()->showMessage("录制中...", 3000);
+            recordBtn_->setText(Lang::s("stop_record"));
+            statusBar()->showMessage(Lang::s("recording"), 3000);
         } else {
-            QMessageBox::warning(this, "错误", "无法创建录制文件。");
+            QMessageBox::warning(this, Lang::s("error"), Lang::s("recording_fail"));
         }
     }
 }
@@ -378,8 +441,8 @@ void MainWindow::onToggleRecord()
 void MainWindow::onNetworkCamera()
 {
     bool ok;
-    QString url = QInputDialog::getText(this, "网络摄像头",
-        "输入 RTSP/HTTP 视频 URL:", QLineEdit::Normal, "rtsp://", &ok);
+    QString url = QInputDialog::getText(this, Lang::s("network_title"),
+        Lang::s("network_prompt"), QLineEdit::Normal, "rtsp://", &ok);
     if (!ok || url.trimmed().isEmpty()) return;
 
     setCursor(Qt::WaitCursor);
@@ -389,23 +452,22 @@ void MainWindow::onNetworkCamera()
 
     if (!thread_.openVideo(url.toStdString())) {
         setCursor(Qt::ArrowCursor);
-        QMessageBox::warning(this, "错误",
-            "无法打开网络视频流。\n请检查 URL 是否正确以及网络连接。");
+        QMessageBox::warning(this, Lang::s("error"), Lang::s("network_fail"));
         return;
     }
 
     setCursor(Qt::ArrowCursor);
     paused_ = false;
-    pauseBtn_->setText("暂停");
+    pauseBtn_->setText(Lang::s("pause"));
     thread_.start();
-    statusBar()->showMessage("网络流: " + url, 3000);
+    statusBar()->showMessage(Lang::s("network_opened") + url, 3000);
 }
 
 void MainWindow::onSwitchModel()
 {
     QString dir = QFileInfo(currentModelPath_).absolutePath();
     QString path = QFileDialog::getOpenFileName(this,
-        "选择 ONNX 模型", dir, "ONNX 模型 (*.onnx)");
+        Lang::s("select_model"), dir, Lang::s("model_filter"));
     if (path.isEmpty()) return;
 
     thread_.stop();
@@ -413,17 +475,19 @@ void MainWindow::onSwitchModel()
     thread_.resetTracker();
 
     if (!thread_.detector().loadModel(path.toStdWString())) {
-        QMessageBox::critical(this, "错误", "无法加载模型: " + path);
+        QMessageBox::critical(this, Lang::s("error"),
+            Lang::s("model_switch_fail") + path);
         thread_.start();
         return;
     }
 
     currentModelPath_ = path;
-    deviceLabel_->setText(thread_.detector().isGpuEnabled() ? "GPU (CUDA)" : "CPU");
+    deviceLabel_->setText(thread_.detector().isGpuEnabled()
+        ? Lang::s("device_gpu") : Lang::s("device_cpu"));
     paused_ = false;
-    pauseBtn_->setText("暂停");
+    pauseBtn_->setText(Lang::s("pause"));
     thread_.start();
-    statusBar()->showMessage("模型已切换: " + path, 3000);
+    statusBar()->showMessage(Lang::s("model_switched") + path, 3000);
 }
 
 void MainWindow::onClassFilter()
@@ -445,8 +509,102 @@ void MainWindow::onToggleTracking(bool checked)
         thread_.resetTracker();
         thread_.start();
     }
-    trackingBtn_->setText(checked ? "关闭追踪" : "目标追踪");
-    statusBar()->showMessage(checked ? "目标追踪已启用" : "目标追踪已关闭", 2000);
+    trackingBtn_->setText(checked ? Lang::s("tracking_on") : Lang::s("tracking_off"));
+    statusBar()->showMessage(
+        checked ? Lang::s("tracking_enabled") : Lang::s("tracking_disabled"), 2000);
+}
+
+void MainWindow::onToggleLoop(bool checked)
+{
+    thread_.setLoopEnabled(checked);
+}
+
+void MainWindow::onExport()
+{
+    auto dets = thread_.lastDetections();
+    if (dets.empty()) {
+        QMessageBox::information(this, Lang::s("export_title"), Lang::s("export_no_data"));
+        return;
+    }
+
+    QString path = QFileDialog::getSaveFileName(this, Lang::s("export_title"),
+        QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"),
+        Lang::s("export_filter"));
+    if (path.isEmpty()) return;
+
+    bool success = false;
+    if (path.endsWith(".csv", Qt::CaseInsensitive)) {
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&file);
+            out << "class,classId,confidence,x,y,width,height\n";
+            for (const auto& d : dets) {
+                out << QString::fromStdString(YOLODetector::CLASS_NAMES[d.classId]) << ","
+                    << d.classId << ","
+                    << QString::number(d.confidence, 'f', 4) << ","
+                    << d.bbox.x << "," << d.bbox.y << ","
+                    << d.bbox.width << "," << d.bbox.height << "\n";
+            }
+            success = true;
+        }
+    } else {
+        QJsonObject root;
+        root["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+        QJsonArray arr;
+        for (const auto& d : dets) {
+            QJsonObject obj;
+            obj["class"] = QString::fromStdString(YOLODetector::CLASS_NAMES[d.classId]);
+            obj["classId"] = d.classId;
+            obj["confidence"] = qRound(d.confidence * 10000) / 10000.0;
+            QJsonArray bbox;
+            bbox.append(d.bbox.x);
+            bbox.append(d.bbox.y);
+            bbox.append(d.bbox.width);
+            bbox.append(d.bbox.height);
+            obj["bbox"] = bbox;
+            arr.append(obj);
+        }
+        root["detections"] = arr;
+
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+            success = true;
+        }
+    }
+
+    if (success)
+        statusBar()->showMessage(Lang::s("export_done") + path, 3000);
+    else
+        QMessageBox::warning(this, Lang::s("error"), Lang::s("export_fail"));
+}
+
+void MainWindow::onToggleLanguage()
+{
+    Lang::setLanguage(Lang::language() == Lang::Chinese ? Lang::English : Lang::Chinese);
+    refreshUIText();
+}
+
+void MainWindow::refreshUIText()
+{
+    setWindowTitle(Lang::s("app_title"));
+    pauseBtn_->setText(paused_ ? Lang::s("resume") : Lang::s("pause"));
+    screenshotBtn_->setText(Lang::s("screenshot"));
+    recordBtn_->setText(thread_.isRecording() ? Lang::s("stop_record") : Lang::s("record"));
+    exportBtn_->setText(Lang::s("export_btn"));
+    videoBtn_->setText(Lang::s("open_video"));
+    networkCamBtn_->setText(Lang::s("network_cam"));
+    loopBtn_->setText(Lang::s("loop"));
+    switchModelBtn_->setText(Lang::s("switch_model"));
+    classFilterBtn_->setText(Lang::s("class_filter"));
+    trackingBtn_->setText(trackingBtn_->isChecked() ? Lang::s("tracking_on") : Lang::s("tracking_off"));
+    langBtn_->setText(Lang::s("lang_toggle"));
+    deviceLabel_->setText(thread_.detector().isGpuEnabled()
+        ? Lang::s("device_gpu") : Lang::s("device_cpu"));
+
+    statsDock_->setWindowTitle(Lang::s("stats_title"));
+    statsTable_->setHorizontalHeaderLabels(
+        {Lang::s("stats_class"), Lang::s("stats_count")});
 }
 
 void MainWindow::restartThread()

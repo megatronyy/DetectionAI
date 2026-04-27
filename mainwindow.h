@@ -8,6 +8,8 @@
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QKeyEvent>
+#include <QDockWidget>
+#include <QTableWidget>
 #include <QInputDialog>
 #include "inferencethread.h"
 
@@ -23,7 +25,8 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private slots:
-    void onFrameReady(const QImage& image, int detCount, float fps);
+    void onFrameReady(const QImage& image, int detCount, float fps,
+                      float inferMs, const QMap<int,int>& classCounts);
     void onInputLost(const QString& msg);
     void onTogglePause();
     void onScreenshot();
@@ -36,6 +39,9 @@ private slots:
     void onSwitchModel();
     void onClassFilter();
     void onToggleTracking(bool checked);
+    void onToggleLoop(bool checked);
+    void onExport();
+    void onToggleLanguage();
 
 private:
     QLabel* videoLabel_;
@@ -43,10 +49,13 @@ private:
     QPushButton* screenshotBtn_;
     QPushButton* videoBtn_;
     QPushButton* recordBtn_;
+    QPushButton* exportBtn_;
     QPushButton* networkCamBtn_;
+    QPushButton* loopBtn_;
     QPushButton* switchModelBtn_;
     QPushButton* classFilterBtn_;
     QPushButton* trackingBtn_;
+    QPushButton* langBtn_;
     QComboBox* cameraCombo_;
     QSlider* confSlider_;
     QLabel* confValueLabel_;
@@ -54,18 +63,23 @@ private:
     QLabel* iouValueLabel_;
     QLabel* fpsLabel_;
     QLabel* detLabel_;
+    QLabel* inferLabel_;
     QLabel* deviceLabel_;
+    QDockWidget* statsDock_;
+    QTableWidget* statsTable_;
 
     InferenceThread thread_;
     QImage lastFrame_;
     bool paused_ = false;
     QString currentModelPath_;
     QSet<int> enabledClasses_;
+    QMap<int, int> classStats_;
 
     void setupUI();
     void loadSettings();
     void saveSettings();
     void restartThread();
+    void refreshUIText();
 };
 
 #endif // MAINWINDOW_H

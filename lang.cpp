@@ -1,0 +1,121 @@
+#include "lang.h"
+
+Lang::Language Lang::lang_ = Chinese;
+
+void Lang::setLanguage(Language lang) { lang_ = lang; }
+Lang::Language Lang::language() { return lang_; }
+
+static const struct { const char* key; const char* zh; const char* en; } strings[] = {
+    // Window
+    {"app_title",       "YOLO11 物体检测",           "YOLO11 Object Detection"},
+
+    // Toolbar buttons
+    {"pause",           "暂停",                      "Pause"},
+    {"resume",          "继续",                      "Resume"},
+    {"screenshot",      "截屏",                      "Screenshot"},
+    {"record",          "录制",                      "Record"},
+    {"stop_record",     "停止录制",                   "Stop Recording"},
+    {"open_video",      "打开视频",                   "Open Video"},
+    {"network_cam",     "网络摄像头",                  "Network Camera"},
+    {"loop",            "循环播放",                   "Loop Playback"},
+    {"switch_model",    "切换模型",                   "Switch Model"},
+    {"class_filter",    "类别筛选",                   "Class Filter"},
+    {"tracking_on",     "关闭追踪",                   "Tracking On"},
+    {"tracking_off",    "目标追踪",                   "Tracking"},
+    {"export_btn",      "导出",                      "Export"},
+    {"lang_toggle",     "EN",                        "中文"},
+
+    // Slider labels
+    {"confidence",      "置信度:",                    "Confidence:"},
+    {"iou",             "IoU:",                      "IoU:"},
+
+    // Status bar
+    {"fps",             "FPS: %1",                   "FPS: %1"},
+    {"det_count",       "检测数: %1",                 "Detections: %1"},
+    {"infer_ms",        "推理: %1ms",                 "Infer: %1ms"},
+    {"device_cpu",      "CPU",                       "CPU"},
+    {"device_gpu",      "GPU (CUDA)",                "GPU (CUDA)"},
+
+    // Input label
+    {"input_source",    " 输入: ",                    " Input: "},
+    {"camera",          "摄像头 %1",                  "Camera %1"},
+
+    // Dialogs - model
+    {"select_model",    "选择 ONNX 模型",             "Select ONNX Model"},
+    {"model_filter",    "ONNX 模型 (*.onnx)",         "ONNX Models (*.onnx)"},
+    {"model_load_fail", "无法加载 ONNX 模型。",        "Failed to load ONNX model."},
+    {"model_switch_fail","无法加载模型: ",             "Failed to load model: "},
+    {"model_switched",  "模型已切换: ",                "Model switched: "},
+
+    // Dialogs - camera
+    {"cam_warn",        "警告",                       "Warning"},
+    {"cam_open_fail",   "无法打开默认摄像头，请选择其他输入源或打开视频文件。",
+     "Cannot open default camera. Please select another input source or open a video file."},
+    {"cam_switch_fail", "无法打开摄像头 %1。",          "Cannot open camera %1."},
+    {"cam_switched",    "已切换到摄像头 %1",            "Switched to camera %1"},
+    {"cam_disconnected","摄像头已断开",                 "Camera disconnected"},
+
+    // Dialogs - video
+    {"open_video_title","打开视频",                    "Open Video"},
+    {"video_filter",    "视频文件 (*.mp4 *.avi *.mkv *.mov *.wmv);;所有文件 (*)",
+     "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv);;All Files (*)"},
+    {"video_open_fail", "无法打开视频文件。",            "Cannot open video file."},
+    {"video_opened",    "视频: ",                      "Video: "},
+    {"video_ended",     "视频播放结束",                  "Video playback ended"},
+
+    // Dialogs - network
+    {"network_title",   "网络摄像头",                   "Network Camera"},
+    {"network_prompt",  "输入 RTSP/HTTP 视频 URL:",     "Enter RTSP/HTTP video URL:"},
+    {"network_fail",    "无法打开网络视频流。\n请检查 URL 是否正确以及网络连接。",
+     "Cannot open network stream.\nPlease check the URL and network connection."},
+    {"network_opened",  "网络流: ",                     "Stream: "},
+
+    // Dialogs - screenshot
+    {"save_screenshot", "保存截图",                     "Save Screenshot"},
+    {"image_filter",    "图片 (*.png *.jpg *.bmp)",     "Images (*.png *.jpg *.bmp)"},
+    {"screenshot_saved","截图已保存: ",                  "Screenshot saved: "},
+    {"screenshot_fail", "保存截图失败。",                "Failed to save screenshot."},
+
+    // Dialogs - recording
+    {"save_recording",  "保存录制",                     "Save Recording"},
+    {"video_save_filter","视频 (*.mp4 *.avi)",          "Video (*.mp4 *.avi)"},
+    {"recording_stopped","录制已停止",                   "Recording stopped"},
+    {"recording",       "录制中...",                    "Recording..."},
+    {"recording_fail",  "无法创建录制文件。",             "Failed to create recording file."},
+
+    // Tracking
+    {"tracking_enabled","目标追踪已启用",                "Object tracking enabled"},
+    {"tracking_disabled","目标追踪已关闭",               "Object tracking disabled"},
+
+    // Class filter dialog
+    {"class_filter_title","类别筛选",                   "Class Filter"},
+    {"select_all",      "全选",                        "Select All"},
+    {"select_none",     "全不选",                       "Select None"},
+
+    // Statistics dock
+    {"stats_title",     "检测统计",                     "Detection Statistics"},
+    {"stats_class",     "类别",                        "Class"},
+    {"stats_count",     "次数",                        "Count"},
+
+    // Export
+    {"export_title",    "导出检测结果",                  "Export Detections"},
+    {"export_filter",   "JSON (*.json);;CSV (*.csv)",  "JSON (*.json);;CSV (*.csv)"},
+    {"export_done",     "检测结果已导出: ",              "Detections exported: "},
+    {"export_fail",     "导出检测结果失败。",             "Failed to export detections."},
+    {"export_no_data",  "当前无检测结果可导出。",          "No detections to export."},
+
+    // Errors
+    {"error",           "错误",                        "Error"},
+
+    {nullptr, nullptr, nullptr}
+};
+
+QString Lang::s(const QString& key)
+{
+    for (int i = 0; strings[i].key != nullptr; i++) {
+        if (key == strings[i].key)
+            return (lang_ == Chinese) ? QString::fromUtf8(strings[i].zh)
+                                      : QString::fromUtf8(strings[i].en);
+    }
+    return key;
+}

@@ -1,5 +1,6 @@
 #include "classfilterdialog.h"
 #include "yolodetector.h"
+#include "lang.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
@@ -10,15 +11,15 @@ ClassFilterDialog::ClassFilterDialog(const QSet<int>& enabledClasses,
                                      QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle("类别筛选");
+    setWindowTitle(Lang::s("class_filter_title"));
     resize(320, 500);
 
     auto* mainLayout = new QVBoxLayout(this);
 
     // Select all / none buttons
     auto* btnLayout = new QHBoxLayout;
-    auto* allBtn = new QPushButton("全选");
-    auto* noneBtn = new QPushButton("全不选");
+    auto* allBtn = new QPushButton(Lang::s("select_all"));
+    auto* noneBtn = new QPushButton(Lang::s("select_none"));
     btnLayout->addWidget(allBtn);
     btnLayout->addWidget(noneBtn);
     mainLayout->addLayout(btnLayout);

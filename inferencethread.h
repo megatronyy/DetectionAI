@@ -3,10 +3,12 @@
 
 #include <QThread>
 #include <QImage>
+#include <QMap>
 #include <opencv2/opencv.hpp>
 #include "yolodetector.h"
 #include "tracker.h"
 #include <atomic>
+#include <mutex>
 
 class InferenceThread : public QThread
 {
@@ -31,8 +33,14 @@ public:
     bool isTrackingEnabled() const;
     void resetTracker();
 
+    void setLoopEnabled(bool enabled);
+    bool isLoopEnabled() const;
+    QSize frameSize() const;
+    std::vector<Detection> lastDetections() const;
+
 signals:
-    void frameReady(const QImage& image, int detectionCount, float fps);
+    void frameReady(const QImage& image, int detectionCount, float fps,
+                    float inferMs, const QMap<int,int>& classCounts);
     void inputLost(const QString& msg);
 
 protected:
@@ -49,8 +57,12 @@ private:
     std::atomic<bool> isVideo_{false};
     std::atomic<bool> recording_{false};
     std::atomic<bool> trackingEnabled_{false};
+    std::atomic<bool> loopEnabled_{false};
 
     cv::Mat currentFrame_;
+    QSize lastFrameSize_;
+    std::vector<Detection> lastDetections_;
+    mutable std::mutex detectionsMutex_;
 
     void drawDetections(cv::Mat& frame, const std::vector<Detection>& dets);
     void drawTracks(cv::Mat& frame, const std::vector<Track>& tracks);

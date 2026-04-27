@@ -25,13 +25,15 @@ SOURCES += main.cpp \
            yolodetector.cpp \
            inferencethread.cpp \
            tracker.cpp \
-           classfilterdialog.cpp
+           classfilterdialog.cpp \
+           lang.cpp
 
 HEADERS  += mainwindow.h \
             yolodetector.h \
             inferencethread.h \
             tracker.h \
-            classfilterdialog.h
+            classfilterdialog.h \
+            lang.h
 
 FORMS    += mainwindow.ui
 RC_FILE  = app.rc
