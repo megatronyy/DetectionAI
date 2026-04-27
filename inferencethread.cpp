@@ -13,12 +13,16 @@ YOLODetector& InferenceThread::detector() { return detector_; }
 bool InferenceThread::isVideoSource() const { return isVideo_; }
 void InferenceThread::setPaused(bool p) { paused_ = p; }
 bool InferenceThread::isRecording() const { return recording_; }
+void InferenceThread::setTrackingEnabled(bool e) { trackingEnabled_ = e; }
+bool InferenceThread::isTrackingEnabled() const { return trackingEnabled_; }
+void InferenceThread::resetTracker() { tracker_.reset(); }
 
 bool InferenceThread::openCamera(int index)
 {
     if (cap_.isOpened()) cap_.release();
     cap_.open(index);
     isVideo_ = false;
+    tracker_.reset();
     return cap_.isOpened();
 }
 
@@ -27,6 +31,12 @@ bool InferenceThread::openVideo(const std::string& path)
     if (cap_.isOpened()) cap_.release();
     cap_.open(path);
     isVideo_ = true;
+    tracker_.reset();
+
+    if (path.compare(0, 7, "rtsp://") == 0) {
+        cap_.set(cv::CAP_PROP_BUFFERSIZE, 1);
+    }
+
     return cap_.isOpened();
 }
 
@@ -87,6 +97,35 @@ void InferenceThread::drawDetections(cv::Mat& frame, const std::vector<Detection
     }
 }
 
+void InferenceThread::drawTracks(cv::Mat& frame, const std::vector<Track>& tracks)
+{
+    for (const auto& t : tracks) {
+        cv::Scalar color = classColor(t.det.classId);
+        cv::rectangle(frame, t.det.bbox, color, 2);
+
+        std::string label = "#" + std::to_string(t.trackId) + " " +
+                            YOLODetector::CLASS_NAMES[t.det.classId] +
+                            " " + cv::format("%.2f", t.det.confidence);
+        int baseline = 0;
+        double fontScale = 0.5;
+        int thickness = 1;
+        cv::Size textSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
+                                             fontScale, thickness, &baseline);
+
+        int top = t.det.bbox.y;
+        int textY = (top > textSize.height + 4) ? (top - 4) : (top + textSize.height + 4);
+
+        cv::rectangle(frame,
+            cv::Point(t.det.bbox.x, textY - textSize.height - 2),
+            cv::Point(t.det.bbox.x + textSize.width, textY + 2),
+            color, cv::FILLED);
+        cv::putText(frame, label,
+            cv::Point(t.det.bbox.x, textY),
+            cv::FONT_HERSHEY_SIMPLEX, fontScale,
+            cv::Scalar(0, 0, 0), thickness);
+    }
+}
+
 void InferenceThread::run()
 {
     running_ = true;
@@ -126,7 +165,12 @@ void InferenceThread::run()
         emptyCount = 0;
 
         auto dets = detector_.detect(currentFrame_);
-        drawDetections(currentFrame_, dets);
+        if (trackingEnabled_) {
+            auto tracks = tracker_.update(dets);
+            drawTracks(currentFrame_, tracks);
+        } else {
+            drawDetections(currentFrame_, dets);
+        }
 
         if (recording_ && writer_.isOpened()) {
             writer_ << currentFrame_;

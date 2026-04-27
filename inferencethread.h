@@ -5,6 +5,7 @@
 #include <QImage>
 #include <opencv2/opencv.hpp>
 #include "yolodetector.h"
+#include "tracker.h"
 #include <atomic>
 
 class InferenceThread : public QThread
@@ -26,6 +27,10 @@ public:
     void stopRecording();
     bool isRecording() const;
 
+    void setTrackingEnabled(bool enabled);
+    bool isTrackingEnabled() const;
+    void resetTracker();
+
 signals:
     void frameReady(const QImage& image, int detectionCount, float fps);
     void inputLost(const QString& msg);
@@ -37,15 +42,18 @@ private:
     cv::VideoCapture cap_;
     cv::VideoWriter writer_;
     YOLODetector detector_;
+    Tracker tracker_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> paused_{false};
     std::atomic<bool> isVideo_{false};
     std::atomic<bool> recording_{false};
+    std::atomic<bool> trackingEnabled_{false};
 
     cv::Mat currentFrame_;
 
     void drawDetections(cv::Mat& frame, const std::vector<Detection>& dets);
+    void drawTracks(cv::Mat& frame, const std::vector<Track>& tracks);
     static cv::Scalar classColor(int classId);
 };
 

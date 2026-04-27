@@ -6,6 +6,8 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <QSet>
+#include <mutex>
 
 struct Detection {
     int classId;
@@ -25,6 +27,8 @@ public:
     float confThreshold() const;
     void setIouThreshold(float t);
     float iouThreshold() const;
+    void setEnabledClasses(const QSet<int>& classes);
+    QSet<int> enabledClasses() const;
     bool isGpuEnabled() const;
     bool isLoaded() const;
 
@@ -48,6 +52,9 @@ private:
 
     float scaleX_ = 1.f, scaleY_ = 1.f;
     int padX_ = 0, padY_ = 0;
+
+    QSet<int> enabledClasses_;
+    mutable std::mutex filterMutex_;
 
     // Pre-allocated buffers (avoid per-frame heap allocation)
     std::vector<float> inputBuf_;

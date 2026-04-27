@@ -23,11 +23,15 @@ LIBS += -L$$ORT_LIB -lonnxruntime
 SOURCES += main.cpp \
            mainwindow.cpp \
            yolodetector.cpp \
-           inferencethread.cpp
+           inferencethread.cpp \
+           tracker.cpp \
+           classfilterdialog.cpp
 
 HEADERS  += mainwindow.h \
             yolodetector.h \
-            inferencethread.h
+            inferencethread.h \
+            tracker.h \
+            classfilterdialog.h
 
 FORMS    += mainwindow.ui
 RC_FILE  = app.rc

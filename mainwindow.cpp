@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "classfilterdialog.h"
 #include <QIcon>
 #include <QToolBar>
 #include <QStatusBar>
@@ -8,6 +9,8 @@
 #include <QDateTime>
 #include <QSettings>
 #include <QDebug>
+#include <QInputDialog>
+#include <QFileInfo>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -20,7 +23,8 @@ MainWindow::MainWindow(QWidget *parent)
     loadSettings();
 
     // Load model
-    QString modelPath = "yolo11n.onnx";
+    QSettings initSettings("DetectionAI", "YOLODetector");
+    QString modelPath = initSettings.value("modelPath", "yolo11n.onnx").toString();
     if (!thread_.detector().loadModel(modelPath.toStdWString())) {
         modelPath = QFileDialog::getOpenFileName(this,
             "选择 ONNX 模型", "", "ONNX 模型 (*.onnx)");
@@ -29,6 +33,7 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
     }
+    currentModelPath_ = modelPath;
 
     deviceLabel_->setText(thread_.detector().isGpuEnabled() ? "GPU (CUDA)" : "CPU");
 
@@ -64,6 +69,11 @@ void MainWindow::setupUI()
     screenshotBtn_ = new QPushButton("截屏");
     recordBtn_ = new QPushButton("录制");
     videoBtn_ = new QPushButton("打开视频");
+    networkCamBtn_ = new QPushButton("网络摄像头");
+    switchModelBtn_ = new QPushButton("切换模型");
+    classFilterBtn_ = new QPushButton("类别筛选");
+    trackingBtn_ = new QPushButton("目标追踪");
+    trackingBtn_->setCheckable(true);
 
     cameraCombo_ = new QComboBox;
     for (int i = 0; i < 5; i++)
@@ -76,6 +86,12 @@ void MainWindow::setupUI()
     toolbar->addWidget(recordBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(videoBtn_);
+    toolbar->addWidget(networkCamBtn_);
+    toolbar->addSeparator();
+    toolbar->addWidget(switchModelBtn_);
+    toolbar->addSeparator();
+    toolbar->addWidget(classFilterBtn_);
+    toolbar->addWidget(trackingBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(" 输入: "));
     toolbar->addWidget(cameraCombo_);
@@ -84,6 +100,10 @@ void MainWindow::setupUI()
     connect(screenshotBtn_, &QPushButton::clicked, this, &MainWindow::onScreenshot);
     connect(recordBtn_, &QPushButton::clicked, this, &MainWindow::onToggleRecord);
     connect(videoBtn_, &QPushButton::clicked, this, &MainWindow::onOpenVideo);
+    connect(networkCamBtn_, &QPushButton::clicked, this, &MainWindow::onNetworkCamera);
+    connect(switchModelBtn_, &QPushButton::clicked, this, &MainWindow::onSwitchModel);
+    connect(classFilterBtn_, &QPushButton::clicked, this, &MainWindow::onClassFilter);
+    connect(trackingBtn_, &QPushButton::toggled, this, &MainWindow::onToggleTracking);
     connect(cameraCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onCameraChanged);
 
@@ -156,11 +176,21 @@ void MainWindow::loadSettings()
     float iou = settings.value("iou", 0.45).toFloat();
     int cam = settings.value("camera", 0).toInt();
     QSize winSize = settings.value("windowSize", QSize(960, 720)).toSize();
+    bool tracking = settings.value("tracking", false).toBool();
 
     confSlider_->setValue((int)(conf * 100));
     iouSlider_->setValue((int)(iou * 100));
     cameraCombo_->setCurrentIndex(std::min(cam, cameraCombo_->count() - 1));
     resize(winSize);
+
+    trackingBtn_->setChecked(tracking);
+    thread_.setTrackingEnabled(tracking);
+
+    QList<QVariant> classList = settings.value("enabledClasses").toList();
+    QSet<int> classes;
+    for (const auto& v : classList) classes.insert(v.toInt());
+    thread_.detector().setEnabledClasses(classes);
+    enabledClasses_ = classes;
 
     thread_.detector().setConfThreshold(conf);
     thread_.detector().setIouThreshold(iou);
@@ -173,6 +203,12 @@ void MainWindow::saveSettings()
     settings.setValue("iou", thread_.detector().iouThreshold());
     settings.setValue("camera", cameraCombo_->currentIndex());
     settings.setValue("windowSize", size());
+    settings.setValue("modelPath", currentModelPath_);
+    settings.setValue("tracking", thread_.isTrackingEnabled());
+
+    QList<QVariant> classList;
+    for (int id : enabledClasses_) classList.append(id);
+    settings.setValue("enabledClasses", classList);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -194,6 +230,15 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         break;
     case Qt::Key_O:
         onOpenVideo();
+        break;
+    case Qt::Key_N:
+        onNetworkCamera();
+        break;
+    case Qt::Key_M:
+        onSwitchModel();
+        break;
+    case Qt::Key_T:
+        trackingBtn_->toggle();
         break;
     case Qt::Key_F11:
         isFullScreen() ? showNormal() : showFullScreen();
@@ -328,6 +373,80 @@ void MainWindow::onToggleRecord()
             QMessageBox::warning(this, "错误", "无法创建录制文件。");
         }
     }
+}
+
+void MainWindow::onNetworkCamera()
+{
+    bool ok;
+    QString url = QInputDialog::getText(this, "网络摄像头",
+        "输入 RTSP/HTTP 视频 URL:", QLineEdit::Normal, "rtsp://", &ok);
+    if (!ok || url.trimmed().isEmpty()) return;
+
+    setCursor(Qt::WaitCursor);
+
+    thread_.stop();
+    thread_.wait();
+
+    if (!thread_.openVideo(url.toStdString())) {
+        setCursor(Qt::ArrowCursor);
+        QMessageBox::warning(this, "错误",
+            "无法打开网络视频流。\n请检查 URL 是否正确以及网络连接。");
+        return;
+    }
+
+    setCursor(Qt::ArrowCursor);
+    paused_ = false;
+    pauseBtn_->setText("暂停");
+    thread_.start();
+    statusBar()->showMessage("网络流: " + url, 3000);
+}
+
+void MainWindow::onSwitchModel()
+{
+    QString dir = QFileInfo(currentModelPath_).absolutePath();
+    QString path = QFileDialog::getOpenFileName(this,
+        "选择 ONNX 模型", dir, "ONNX 模型 (*.onnx)");
+    if (path.isEmpty()) return;
+
+    thread_.stop();
+    thread_.wait();
+    thread_.resetTracker();
+
+    if (!thread_.detector().loadModel(path.toStdWString())) {
+        QMessageBox::critical(this, "错误", "无法加载模型: " + path);
+        thread_.start();
+        return;
+    }
+
+    currentModelPath_ = path;
+    deviceLabel_->setText(thread_.detector().isGpuEnabled() ? "GPU (CUDA)" : "CPU");
+    paused_ = false;
+    pauseBtn_->setText("暂停");
+    thread_.start();
+    statusBar()->showMessage("模型已切换: " + path, 3000);
+}
+
+void MainWindow::onClassFilter()
+{
+    ClassFilterDialog dlg(thread_.detector().enabledClasses(), this);
+    if (dlg.exec() == QDialog::Accepted) {
+        QSet<int> selected = dlg.selectedClasses();
+        thread_.detector().setEnabledClasses(selected);
+        enabledClasses_ = selected;
+    }
+}
+
+void MainWindow::onToggleTracking(bool checked)
+{
+    thread_.setTrackingEnabled(checked);
+    if (!checked) {
+        thread_.stop();
+        thread_.wait();
+        thread_.resetTracker();
+        thread_.start();
+    }
+    trackingBtn_->setText(checked ? "关闭追踪" : "目标追踪");
+    statusBar()->showMessage(checked ? "目标追踪已启用" : "目标追踪已关闭", 2000);
 }
 
 void MainWindow::restartThread()

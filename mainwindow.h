@@ -8,6 +8,7 @@
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QKeyEvent>
+#include <QInputDialog>
 #include "inferencethread.h"
 
 class MainWindow : public QMainWindow
@@ -31,6 +32,10 @@ private slots:
     void onConfChanged(int value);
     void onIouChanged(int value);
     void onToggleRecord();
+    void onNetworkCamera();
+    void onSwitchModel();
+    void onClassFilter();
+    void onToggleTracking(bool checked);
 
 private:
     QLabel* videoLabel_;
@@ -38,6 +43,10 @@ private:
     QPushButton* screenshotBtn_;
     QPushButton* videoBtn_;
     QPushButton* recordBtn_;
+    QPushButton* networkCamBtn_;
+    QPushButton* switchModelBtn_;
+    QPushButton* classFilterBtn_;
+    QPushButton* trackingBtn_;
     QComboBox* cameraCombo_;
     QSlider* confSlider_;
     QLabel* confValueLabel_;
@@ -50,6 +59,8 @@ private:
     InferenceThread thread_;
     QImage lastFrame_;
     bool paused_ = false;
+    QString currentModelPath_;
+    QSet<int> enabledClasses_;
 
     void setupUI();
     void loadSettings();

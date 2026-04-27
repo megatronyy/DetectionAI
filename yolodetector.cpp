@@ -197,6 +197,12 @@ std::vector<Detection> YOLODetector::postprocess(
 
         if (conf < confThreshold_) continue;
 
+        {
+            std::lock_guard<std::mutex> lock(filterMutex_);
+            if (!enabledClasses_.empty() && !enabledClasses_.contains(cls))
+                continue;
+        }
+
         int x1 = (int)((bx - bw / 2 - padX_) / scaleX_);
         int y1 = (int)((by - bh / 2 - padY_) / scaleY_);
         int x2 = (int)((bx + bw / 2 - padX_) / scaleX_);
@@ -235,5 +241,15 @@ void YOLODetector::setConfThreshold(float t) { confThreshold_ = t; }
 float YOLODetector::confThreshold() const { return confThreshold_; }
 void YOLODetector::setIouThreshold(float t) { iouThreshold_ = t; }
 float YOLODetector::iouThreshold() const { return iouThreshold_; }
+
+void YOLODetector::setEnabledClasses(const QSet<int>& classes) {
+    std::lock_guard<std::mutex> lock(filterMutex_);
+    enabledClasses_ = classes;
+}
+QSet<int> YOLODetector::enabledClasses() const {
+    std::lock_guard<std::mutex> lock(filterMutex_);
+    return enabledClasses_;
+}
+
 bool YOLODetector::isGpuEnabled() const { return gpuEnabled_; }
 bool YOLODetector::isLoaded() const { return loaded_; }
