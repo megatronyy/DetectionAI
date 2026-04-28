@@ -8,6 +8,8 @@
 #include <QComboBox>
 #include <QCloseEvent>
 #include <QKeyEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QDockWidget>
 #include <QTableWidget>
 #include <QInputDialog>
@@ -23,6 +25,8 @@ public:
 protected:
     void closeEvent(QCloseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private slots:
     void onFrameReady(const QImage& image, int detCount, float fps,
@@ -42,6 +46,9 @@ private slots:
     void onToggleLoop(bool checked);
     void onExport();
     void onToggleLanguage();
+    void onAbout();
+    void onClearStats();
+    void onRecentModel();
 
 private:
     QLabel* videoLabel_;
@@ -53,6 +60,7 @@ private:
     QPushButton* networkCamBtn_;
     QPushButton* loopBtn_;
     QPushButton* switchModelBtn_;
+    QPushButton* recentModelBtn_;
     QPushButton* classFilterBtn_;
     QPushButton* trackingBtn_;
     QPushButton* langBtn_;
@@ -67,6 +75,7 @@ private:
     QLabel* deviceLabel_;
     QDockWidget* statsDock_;
     QTableWidget* statsTable_;
+    QPushButton* clearStatsBtn_;
 
     InferenceThread thread_;
     QImage lastFrame_;
@@ -74,12 +83,16 @@ private:
     QString currentModelPath_;
     QSet<int> enabledClasses_;
     QMap<int, int> classStats_;
+    QStringList recentModels_;
 
     void setupUI();
     void loadSettings();
     void saveSettings();
-    void restartThread();
+    void enumerateCameras();
     void refreshUIText();
+    void addRecentModel(const QString& path);
+    void openVideoFile(const QString& path);
+    void loadModelFile(const QString& path);
 };
 
 #endif // MAINWINDOW_H

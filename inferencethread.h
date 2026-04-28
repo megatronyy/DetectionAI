@@ -66,6 +66,7 @@ private:
 
     void drawDetections(cv::Mat& frame, const std::vector<Detection>& dets);
     void drawTracks(cv::Mat& frame, const std::vector<Track>& tracks);
+    static void drawLabel(cv::Mat& frame, const cv::Rect& bbox, int classId, const std::string& label);
     static cv::Scalar classColor(int classId);
 };
 

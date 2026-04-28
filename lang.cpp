@@ -107,6 +107,46 @@ static const struct { const char* key; const char* zh; const char* en; } strings
     // Errors
     {"error",           "错误",                        "Error"},
 
+    // Loop playback
+    {"loop_enabled",    "循环播放已启用",                "Loop playback enabled"},
+    {"loop_disabled",   "循环播放已关闭",                "Loop playback disabled"},
+
+    // About dialog
+    {"about",           "关于",                        "About"},
+    {"about_text",      "<h2>DetectionAI</h2>"
+                        "<p>YOLO11 实时目标检测</p>"
+                        "<p>基于 Qt %1 / OpenCV %2 / ONNX Runtime</p>"
+                        "<p>COCO 80 类 | SORT 多目标追踪</p>",
+     "<h2>DetectionAI</h2>"
+     "<p>YOLO11 Real-time Object Detection</p>"
+     "<p>Powered by Qt %1 / OpenCV %2 / ONNX Runtime</p>"
+     "<p>COCO 80 Classes | SORT Multi-Object Tracking</p>"},
+
+    // Tooltips
+    {"tip_pause",       "暂停/继续 (Space)",             "Pause/Resume (Space)"},
+    {"tip_screenshot",  "截图 (S)",                     "Screenshot (S)"},
+    {"tip_record",      "录制视频",                      "Record video"},
+    {"tip_export",      "导出检测结果 (E)",              "Export detections (E)"},
+    {"tip_open_video",  "打开视频文件 (O)",              "Open video file (O)"},
+    {"tip_network",     "网络摄像头 (N)",                "Network camera (N)"},
+    {"tip_loop",        "循环播放 (L)",                  "Loop playback (L)"},
+    {"tip_model",       "切换模型 (M)",                  "Switch model (M)"},
+    {"tip_filter",      "类别筛选",                     "Class filter"},
+    {"tip_tracking",    "目标追踪 (T)",                  "Object tracking (T)"},
+    {"tip_lang",        "切换语言",                      "Switch language"},
+
+    // Drag & drop
+    {"drop_video",      "已打开: ",                     "Opened: "},
+    {"drop_fail",       "无法打开拖入的文件。",           "Cannot open dropped file."},
+    {"drop_model_ok",   "模型已加载: ",                  "Model loaded: "},
+    {"drop_model_fail", "无法加载拖入的模型文件。",       "Cannot load dropped model file."},
+
+    // Recent models
+    {"recent_models",   "最近模型",                     "Recent Models"},
+
+    // Stats clear
+    {"stats_clear",     "清零统计",                     "Clear Stats"},
+
     {nullptr, nullptr, nullptr}
 };
 

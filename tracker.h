@@ -25,6 +25,8 @@ private:
         int hits;
         int missedFrames;
         cv::Rect lastBbox;
+        int classId;
+        float confidence;
     };
 
     std::vector<InternalTrack> tracks_;

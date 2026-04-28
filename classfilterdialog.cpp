@@ -66,10 +66,10 @@ QSet<int> ClassFilterDialog::selectedClasses() const
 
 void ClassFilterDialog::onSelectAll()
 {
-    for (auto* cb : checkBoxes_) cb->setChecked(true);
+    for (auto* cb : std::as_const(checkBoxes_)) cb->setChecked(true);
 }
 
 void ClassFilterDialog::onSelectNone()
 {
-    for (auto* cb : checkBoxes_) cb->setChecked(false);
+    for (auto* cb : std::as_const(checkBoxes_)) cb->setChecked(false);
 }

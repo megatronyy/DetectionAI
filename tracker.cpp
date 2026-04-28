@@ -207,6 +207,8 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
             cv::Mat m = bboxToMeasurement(detections[j].bbox);
             tracks_[i].kf.correct(m);
             tracks_[i].lastBbox = detections[j].bbox;
+            tracks_[i].classId = detections[j].classId;
+            tracks_[i].confidence = detections[j].confidence;
             tracks_[i].hits++;
             tracks_[i].missedFrames = 0;
         } else {
@@ -229,6 +231,8 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
             t.hits = 1;
             t.missedFrames = 0;
             t.lastBbox = detections[j].bbox;
+            t.classId = detections[j].classId;
+            t.confidence = detections[j].confidence;
             tracks_.push_back(t);
         }
     }
@@ -238,17 +242,7 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
     result.reserve(tracks_.size());
     for (const auto& t : tracks_) {
         if (t.hits >= minHits_ && t.missedFrames == 0) {
-            // Find matching detection by bbox to get classId and confidence
-            int classId = 0;
-            float confidence = 0.f;
-            for (const auto& d : detections) {
-                if (d.bbox == t.lastBbox) {
-                    classId = d.classId;
-                    confidence = d.confidence;
-                    break;
-                }
-            }
-            result.push_back({{classId, confidence, t.lastBbox}, t.trackId});
+            result.push_back({{t.classId, t.confidence, t.lastBbox}, t.trackId});
         }
     }
     return result;

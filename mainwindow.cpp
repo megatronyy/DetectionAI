@@ -16,12 +16,19 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QMenuBar>
+#include <QMenu>
+#include <QMimeData>
+#include <QUrl>
+#include <QProgressDialog>
+#include <opencv2/core/version.hpp>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowIcon(QIcon("app.ico"));
     resize(960, 720);
+    setAcceptDrops(true);
 
     setupUI();
     loadSettings();
@@ -38,6 +45,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
     }
     currentModelPath_ = modelPath;
+    addRecentModel(modelPath);
 
     deviceLabel_->setText(thread_.detector().isGpuEnabled()
         ? Lang::s("device_gpu") : Lang::s("device_cpu"));
@@ -64,6 +72,25 @@ MainWindow::~MainWindow()
     thread_.wait();
 }
 
+void MainWindow::enumerateCameras()
+{
+    cameraCombo_->blockSignals(true);
+    cameraCombo_->clear();
+    auto oldLevel = cv::utils::logging::getLogLevel();
+    cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
+    for (int i = 0; i < 10; i++) {
+        cv::VideoCapture cap(i);
+        if (cap.isOpened()) {
+            cameraCombo_->addItem(Lang::s("camera").arg(i), i);
+            cap.release();
+        }
+    }
+    cv::utils::logging::setLogLevel(oldLevel);
+    if (cameraCombo_->count() == 0)
+        cameraCombo_->addItem(Lang::s("camera").arg(0), 0);
+    cameraCombo_->blockSignals(false);
+}
+
 void MainWindow::setupUI()
 {
     // --- Toolbar ---
@@ -78,6 +105,7 @@ void MainWindow::setupUI()
     networkCamBtn_  = new QPushButton(Lang::s("network_cam"));
     loopBtn_        = new QPushButton(Lang::s("loop"));
     switchModelBtn_ = new QPushButton(Lang::s("switch_model"));
+    recentModelBtn_ = new QPushButton(Lang::s("recent_models"));
     classFilterBtn_ = new QPushButton(Lang::s("class_filter"));
     trackingBtn_    = new QPushButton(Lang::s("tracking_off"));
     langBtn_        = new QPushButton(Lang::s("lang_toggle"));
@@ -85,9 +113,20 @@ void MainWindow::setupUI()
     loopBtn_->setCheckable(true);
     trackingBtn_->setCheckable(true);
 
+    pauseBtn_->setToolTip(Lang::s("tip_pause"));
+    screenshotBtn_->setToolTip(Lang::s("tip_screenshot"));
+    recordBtn_->setToolTip(Lang::s("tip_record"));
+    exportBtn_->setToolTip(Lang::s("tip_export"));
+    videoBtn_->setToolTip(Lang::s("tip_open_video"));
+    networkCamBtn_->setToolTip(Lang::s("tip_network"));
+    loopBtn_->setToolTip(Lang::s("tip_loop"));
+    switchModelBtn_->setToolTip(Lang::s("tip_model"));
+    classFilterBtn_->setToolTip(Lang::s("tip_filter"));
+    trackingBtn_->setToolTip(Lang::s("tip_tracking"));
+    langBtn_->setToolTip(Lang::s("tip_lang"));
+
     cameraCombo_ = new QComboBox;
-    for (int i = 0; i < 5; i++)
-        cameraCombo_->addItem(Lang::s("camera").arg(i), i);
+    enumerateCameras();
     cameraCombo_->setCurrentIndex(0);
 
     toolbar->addWidget(pauseBtn_);
@@ -101,6 +140,7 @@ void MainWindow::setupUI()
     toolbar->addWidget(loopBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(switchModelBtn_);
+    toolbar->addWidget(recentModelBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(classFilterBtn_);
     toolbar->addWidget(trackingBtn_);
@@ -118,6 +158,7 @@ void MainWindow::setupUI()
     connect(networkCamBtn_, &QPushButton::clicked, this, &MainWindow::onNetworkCamera);
     connect(loopBtn_, &QPushButton::toggled, this, &MainWindow::onToggleLoop);
     connect(switchModelBtn_, &QPushButton::clicked, this, &MainWindow::onSwitchModel);
+    connect(recentModelBtn_, &QPushButton::clicked, this, &MainWindow::onRecentModel);
     connect(classFilterBtn_, &QPushButton::clicked, this, &MainWindow::onClassFilter);
     connect(trackingBtn_, &QPushButton::toggled, this, &MainWindow::onToggleTracking);
     connect(langBtn_, &QPushButton::clicked, this, &MainWindow::onToggleLanguage);
@@ -185,16 +226,30 @@ void MainWindow::setupUI()
     statusBar()->addWidget(inferLabel_);
     statusBar()->addPermanentWidget(deviceLabel_);
 
+    // --- Help menu (About) ---
+    QMenu* helpMenu = menuBar()->addMenu(Lang::s("about"));
+    helpMenu->addAction(Lang::s("about"), this, &MainWindow::onAbout);
+
     // --- Statistics dock ---
     statsDock_ = new QDockWidget(Lang::s("stats_title"), this);
-    statsTable_ = new QTableWidget(0, 2, statsDock_);
+    auto* dockWidget = new QWidget;
+    auto* dockLayout = new QVBoxLayout(dockWidget);
+    dockLayout->setContentsMargins(0, 0, 0, 0);
+
+    statsTable_ = new QTableWidget(0, 2, dockWidget);
     statsTable_->setHorizontalHeaderLabels(
         {Lang::s("stats_class"), Lang::s("stats_count")});
     statsTable_->horizontalHeader()->setStretchLastSection(true);
     statsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     statsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    statsDock_->setWidget(statsTable_);
+
+    clearStatsBtn_ = new QPushButton(Lang::s("stats_clear"));
+    dockLayout->addWidget(statsTable_);
+    dockLayout->addWidget(clearStatsBtn_);
+    statsDock_->setWidget(dockWidget);
     addDockWidget(Qt::RightDockWidgetArea, statsDock_);
+
+    connect(clearStatsBtn_, &QPushButton::clicked, this, &MainWindow::onClearStats);
 }
 
 void MainWindow::loadSettings()
@@ -204,6 +259,7 @@ void MainWindow::loadSettings()
     float iou = settings.value("iou", 0.45).toFloat();
     int cam = settings.value("camera", 0).toInt();
     QSize winSize = settings.value("windowSize", QSize(960, 720)).toSize();
+    QPoint winPos = settings.value("windowPos", QPoint()).toPoint();
     bool tracking = settings.value("tracking", false).toBool();
     bool loop = settings.value("loop", false).toBool();
     int lang = settings.value("language", 0).toInt();
@@ -214,6 +270,7 @@ void MainWindow::loadSettings()
     iouSlider_->setValue((int)(iou * 100));
     cameraCombo_->setCurrentIndex(std::min(cam, cameraCombo_->count() - 1));
     resize(winSize);
+    if (!winPos.isNull()) move(winPos);
 
     trackingBtn_->setChecked(tracking);
     thread_.setTrackingEnabled(tracking);
@@ -222,12 +279,14 @@ void MainWindow::loadSettings()
 
     QList<QVariant> classList = settings.value("enabledClasses").toList();
     QSet<int> classes;
-    for (const auto& v : classList) classes.insert(v.toInt());
+    for (const auto& v : std::as_const(classList)) classes.insert(v.toInt());
     thread_.detector().setEnabledClasses(classes);
     enabledClasses_ = classes;
 
     thread_.detector().setConfThreshold(conf);
     thread_.detector().setIouThreshold(iou);
+
+    recentModels_ = settings.value("recentModels").toStringList();
 
     if (settings.value("statsVisible", true).toBool())
         statsDock_->show();
@@ -242,14 +301,16 @@ void MainWindow::saveSettings()
     settings.setValue("iou", thread_.detector().iouThreshold());
     settings.setValue("camera", cameraCombo_->currentIndex());
     settings.setValue("windowSize", size());
+    settings.setValue("windowPos", pos());
     settings.setValue("modelPath", currentModelPath_);
     settings.setValue("tracking", thread_.isTrackingEnabled());
     settings.setValue("loop", thread_.isLoopEnabled());
     settings.setValue("language", static_cast<int>(Lang::language()));
     settings.setValue("statsVisible", statsDock_->isVisible());
+    settings.setValue("recentModels", recentModels_);
 
     QList<QVariant> classList;
-    for (int id : enabledClasses_) classList.append(id);
+    for (int id : std::as_const(enabledClasses_)) classList.append(id);
     settings.setValue("enabledClasses", classList);
 }
 
@@ -300,6 +361,33 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
     }
 }
 
+void MainWindow::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasUrls()) {
+        const auto urls = event->mimeData()->urls();
+        if (!urls.isEmpty()) {
+            QString suffix = QFileInfo(urls.first().toLocalFile()).suffix().toLower();
+            if (suffix == "onnx" ||
+                QStringList{"mp4","avi","mkv","mov","wmv"}.contains(suffix))
+                event->acceptProposedAction();
+        }
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent* event)
+{
+    const auto urls = event->mimeData()->urls();
+    if (urls.isEmpty()) return;
+    QString path = urls.first().toLocalFile();
+    QString suffix = QFileInfo(path).suffix().toLower();
+
+    if (suffix == "onnx") {
+        loadModelFile(path);
+    } else {
+        openVideoFile(path);
+    }
+}
+
 // --- Slots ---
 
 void MainWindow::onFrameReady(const QImage& image, int detCount, float fps,
@@ -315,7 +403,6 @@ void MainWindow::onFrameReady(const QImage& image, int detCount, float fps,
     detLabel_->setText(Lang::s("det_count").arg(detCount));
     inferLabel_->setText(Lang::s("infer_ms").arg(inferMs, 0, 'f', 1));
 
-    // Update statistics
     for (auto it = classCounts.begin(); it != classCounts.end(); ++it)
         classStats_[it.key()] += it.value();
 
@@ -363,7 +450,11 @@ void MainWindow::onOpenVideo()
     QString path = QFileDialog::getOpenFileName(this, Lang::s("open_video_title"),
         "", Lang::s("video_filter"));
     if (path.isEmpty()) return;
+    openVideoFile(path);
+}
 
+void MainWindow::openVideoFile(const QString& path)
+{
     thread_.stop();
     thread_.wait();
 
@@ -469,7 +560,11 @@ void MainWindow::onSwitchModel()
     QString path = QFileDialog::getOpenFileName(this,
         Lang::s("select_model"), dir, Lang::s("model_filter"));
     if (path.isEmpty()) return;
+    loadModelFile(path);
+}
 
+void MainWindow::loadModelFile(const QString& path)
+{
     thread_.stop();
     thread_.wait();
     thread_.resetTracker();
@@ -482,12 +577,23 @@ void MainWindow::onSwitchModel()
     }
 
     currentModelPath_ = path;
+    addRecentModel(path);
     deviceLabel_->setText(thread_.detector().isGpuEnabled()
         ? Lang::s("device_gpu") : Lang::s("device_cpu"));
     paused_ = false;
     pauseBtn_->setText(Lang::s("pause"));
     thread_.start();
     statusBar()->showMessage(Lang::s("model_switched") + path, 3000);
+}
+
+void MainWindow::onRecentModel()
+{
+    if (recentModels_.isEmpty()) return;
+
+    QMenu menu;
+    for (const auto& m : std::as_const(recentModels_))
+        menu.addAction(QFileInfo(m).fileName(), [this, m]() { loadModelFile(m); });
+    menu.exec(recentModelBtn_->mapToGlobal(QPoint(0, recentModelBtn_->height())));
 }
 
 void MainWindow::onClassFilter()
@@ -517,6 +623,8 @@ void MainWindow::onToggleTracking(bool checked)
 void MainWindow::onToggleLoop(bool checked)
 {
     thread_.setLoopEnabled(checked);
+    statusBar()->showMessage(
+        checked ? Lang::s("loop_enabled") : Lang::s("loop_disabled"), 2000);
 }
 
 void MainWindow::onExport()
@@ -585,6 +693,20 @@ void MainWindow::onToggleLanguage()
     refreshUIText();
 }
 
+void MainWindow::onAbout()
+{
+    QString cvVer = QString("%1.%2.%3")
+        .arg(CV_VERSION_MAJOR).arg(CV_VERSION_MINOR).arg(CV_VERSION_REVISION);
+    QMessageBox::about(this, Lang::s("about"),
+        Lang::s("about_text").arg(qVersion()).arg(cvVer));
+}
+
+void MainWindow::onClearStats()
+{
+    classStats_.clear();
+    statsTable_->setRowCount(0);
+}
+
 void MainWindow::refreshUIText()
 {
     setWindowTitle(Lang::s("app_title"));
@@ -596,20 +718,64 @@ void MainWindow::refreshUIText()
     networkCamBtn_->setText(Lang::s("network_cam"));
     loopBtn_->setText(Lang::s("loop"));
     switchModelBtn_->setText(Lang::s("switch_model"));
+    recentModelBtn_->setText(Lang::s("recent_models"));
     classFilterBtn_->setText(Lang::s("class_filter"));
     trackingBtn_->setText(trackingBtn_->isChecked() ? Lang::s("tracking_on") : Lang::s("tracking_off"));
     langBtn_->setText(Lang::s("lang_toggle"));
+    clearStatsBtn_->setText(Lang::s("stats_clear"));
     deviceLabel_->setText(thread_.detector().isGpuEnabled()
         ? Lang::s("device_gpu") : Lang::s("device_cpu"));
+
+    pauseBtn_->setToolTip(Lang::s("tip_pause"));
+    screenshotBtn_->setToolTip(Lang::s("tip_screenshot"));
+    recordBtn_->setToolTip(Lang::s("tip_record"));
+    exportBtn_->setToolTip(Lang::s("tip_export"));
+    videoBtn_->setToolTip(Lang::s("tip_open_video"));
+    networkCamBtn_->setToolTip(Lang::s("tip_network"));
+    loopBtn_->setToolTip(Lang::s("tip_loop"));
+    switchModelBtn_->setToolTip(Lang::s("tip_model"));
+    classFilterBtn_->setToolTip(Lang::s("tip_filter"));
+    trackingBtn_->setToolTip(Lang::s("tip_tracking"));
+    langBtn_->setToolTip(Lang::s("tip_lang"));
 
     statsDock_->setWindowTitle(Lang::s("stats_title"));
     statsTable_->setHorizontalHeaderLabels(
         {Lang::s("stats_class"), Lang::s("stats_count")});
+
+    // Refresh camera combo
+    int curCam = cameraCombo_->currentData().toInt();
+    cameraCombo_->blockSignals(true);
+    cameraCombo_->clear();
+    for (int i = 0; i < 10; i++) {
+        // Re-add previously found cameras (we can't re-enumerate here easily)
+        cameraCombo_->addItem(Lang::s("camera").arg(i), i);
+    }
+    // Find the saved camera
+    for (int i = 0; i < cameraCombo_->count(); i++) {
+        if (cameraCombo_->itemData(i).toInt() == curCam) {
+            cameraCombo_->setCurrentIndex(i);
+            break;
+        }
+    }
+    cameraCombo_->blockSignals(false);
+
+    // Refresh help menu
+    if (auto* menuBar = this->menuBar()) {
+        auto actions = menuBar->actions();
+        for (auto* a : std::as_const(actions)) {
+            if (a->menu()) {
+                a->menu()->setTitle(Lang::s("about"));
+                for (auto* sub : a->menu()->actions())
+                    sub->setText(Lang::s("about"));
+            }
+        }
+    }
 }
 
-void MainWindow::restartThread()
+void MainWindow::addRecentModel(const QString& path)
 {
-    thread_.stop();
-    thread_.wait();
-    thread_.start();
+    recentModels_.removeAll(path);
+    recentModels_.prepend(path);
+    while (recentModels_.size() > 5)
+        recentModels_.removeLast();
 }

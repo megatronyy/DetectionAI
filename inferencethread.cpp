@@ -76,60 +76,47 @@ cv::Scalar InferenceThread::classColor(int classId)
     return cv::Scalar(c[0], c[1], c[2]);
 }
 
+void InferenceThread::drawLabel(cv::Mat& frame, const cv::Rect& bbox,
+                                 int classId, const std::string& label)
+{
+    if (classId < 0 || classId >= YOLODetector::NUM_CLASSES) return;
+    cv::Scalar color = classColor(classId);
+    cv::rectangle(frame, bbox, color, 2);
+
+    int baseline = 0;
+    double fontScale = 0.5;
+    int thickness = 1;
+    cv::Size textSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
+                                         fontScale, thickness, &baseline);
+    int top = bbox.y;
+    int textY = (top > textSize.height + 4) ? (top - 4) : (top + textSize.height + 4);
+
+    cv::rectangle(frame,
+        cv::Point(bbox.x, textY - textSize.height - 2),
+        cv::Point(bbox.x + textSize.width, textY + 2),
+        color, cv::FILLED);
+    cv::putText(frame, label,
+        cv::Point(bbox.x, textY),
+        cv::FONT_HERSHEY_SIMPLEX, fontScale,
+        cv::Scalar(0, 0, 0), thickness);
+}
+
 void InferenceThread::drawDetections(cv::Mat& frame, const std::vector<Detection>& dets)
 {
     for (const auto& d : dets) {
-        cv::Scalar color = classColor(d.classId);
-        cv::rectangle(frame, d.bbox, color, 2);
-
         std::string label = YOLODetector::CLASS_NAMES[d.classId] +
                             " " + cv::format("%.2f", d.confidence);
-        int baseline = 0;
-        double fontScale = 0.5;
-        int thickness = 1;
-        cv::Size textSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
-                                             fontScale, thickness, &baseline);
-
-        int top = d.bbox.y;
-        int textY = (top > textSize.height + 4) ? (top - 4) : (top + textSize.height + 4);
-
-        cv::rectangle(frame,
-            cv::Point(d.bbox.x, textY - textSize.height - 2),
-            cv::Point(d.bbox.x + textSize.width, textY + 2),
-            color, cv::FILLED);
-        cv::putText(frame, label,
-            cv::Point(d.bbox.x, textY),
-            cv::FONT_HERSHEY_SIMPLEX, fontScale,
-            cv::Scalar(0, 0, 0), thickness);
+        drawLabel(frame, d.bbox, d.classId, label);
     }
 }
 
 void InferenceThread::drawTracks(cv::Mat& frame, const std::vector<Track>& tracks)
 {
     for (const auto& t : tracks) {
-        cv::Scalar color = classColor(t.det.classId);
-        cv::rectangle(frame, t.det.bbox, color, 2);
-
         std::string label = "#" + std::to_string(t.trackId) + " " +
                             YOLODetector::CLASS_NAMES[t.det.classId] +
                             " " + cv::format("%.2f", t.det.confidence);
-        int baseline = 0;
-        double fontScale = 0.5;
-        int thickness = 1;
-        cv::Size textSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
-                                             fontScale, thickness, &baseline);
-
-        int top = t.det.bbox.y;
-        int textY = (top > textSize.height + 4) ? (top - 4) : (top + textSize.height + 4);
-
-        cv::rectangle(frame,
-            cv::Point(t.det.bbox.x, textY - textSize.height - 2),
-            cv::Point(t.det.bbox.x + textSize.width, textY + 2),
-            color, cv::FILLED);
-        cv::putText(frame, label,
-            cv::Point(t.det.bbox.x, textY),
-            cv::FONT_HERSHEY_SIMPLEX, fontScale,
-            cv::Scalar(0, 0, 0), thickness);
+        drawLabel(frame, t.det.bbox, t.det.classId, label);
     }
 }
 
