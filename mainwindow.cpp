@@ -38,7 +38,8 @@ MainWindow::MainWindow(QWidget *parent)
     QString modelPath = initSettings.value("modelPath", "yolo11n.onnx").toString();
     if (!thread_.detector().loadModel(modelPath.toStdWString())) {
         modelPath = QFileDialog::getOpenFileName(this,
-            Lang::s("select_model"), "", Lang::s("model_filter"));
+            Lang::s("select_model"), "", Lang::s("model_filter"),
+            nullptr, QFileDialog::DontUseNativeDialog);
         if (modelPath.isEmpty() || !thread_.detector().loadModel(modelPath.toStdWString())) {
             QMessageBox::critical(this, Lang::s("error"), Lang::s("model_load_fail"));
             return;
@@ -62,6 +63,10 @@ MainWindow::MainWindow(QWidget *parent)
                 &MainWindow::onFrameReady));
     connect(&thread_, &InferenceThread::inputLost,
             this, &MainWindow::onInputLost);
+    connect(&thread_, &InferenceThread::trackingStatsUpdated,
+            this, &MainWindow::onTrackingStatsUpdated);
+    connect(&thread_, &InferenceThread::crossingStatsUpdated,
+            this, &MainWindow::onCrossingStatsUpdated);
 
     thread_.start();
 }
@@ -108,10 +113,16 @@ void MainWindow::setupUI()
     recentModelBtn_ = new QPushButton(Lang::s("recent_models"));
     classFilterBtn_ = new QPushButton(Lang::s("class_filter"));
     trackingBtn_    = new QPushButton(Lang::s("tracking_off"));
+    trajectoryBtn_  = new QPushButton(Lang::s("trajectory_off"));
+    speedBtn_       = new QPushButton(Lang::s("speed_off"));
+    countLineBtn_   = new QPushButton(Lang::s("draw_line"));
+    clearLineBtn_   = new QPushButton(Lang::s("clear_line"));
     langBtn_        = new QPushButton(Lang::s("lang_toggle"));
 
     loopBtn_->setCheckable(true);
     trackingBtn_->setCheckable(true);
+    trajectoryBtn_->setCheckable(true);
+    speedBtn_->setCheckable(true);
 
     pauseBtn_->setToolTip(Lang::s("tip_pause"));
     screenshotBtn_->setToolTip(Lang::s("tip_screenshot"));
@@ -123,6 +134,10 @@ void MainWindow::setupUI()
     switchModelBtn_->setToolTip(Lang::s("tip_model"));
     classFilterBtn_->setToolTip(Lang::s("tip_filter"));
     trackingBtn_->setToolTip(Lang::s("tip_tracking"));
+    trajectoryBtn_->setToolTip(Lang::s("tip_trajectory"));
+    speedBtn_->setToolTip(Lang::s("tip_speed"));
+    countLineBtn_->setToolTip(Lang::s("tip_draw_line"));
+    clearLineBtn_->setToolTip(Lang::s("tip_clear_line"));
     langBtn_->setToolTip(Lang::s("tip_lang"));
 
     cameraCombo_ = new QComboBox;
@@ -144,6 +159,10 @@ void MainWindow::setupUI()
     toolbar->addSeparator();
     toolbar->addWidget(classFilterBtn_);
     toolbar->addWidget(trackingBtn_);
+    toolbar->addWidget(trajectoryBtn_);
+    toolbar->addWidget(speedBtn_);
+    toolbar->addWidget(countLineBtn_);
+    toolbar->addWidget(clearLineBtn_);
     toolbar->addSeparator();
     toolbar->addWidget(langBtn_);
     toolbar->addSeparator();
@@ -161,6 +180,10 @@ void MainWindow::setupUI()
     connect(recentModelBtn_, &QPushButton::clicked, this, &MainWindow::onRecentModel);
     connect(classFilterBtn_, &QPushButton::clicked, this, &MainWindow::onClassFilter);
     connect(trackingBtn_, &QPushButton::toggled, this, &MainWindow::onToggleTracking);
+    connect(trajectoryBtn_, &QPushButton::toggled, this, &MainWindow::onToggleTrajectory);
+    connect(speedBtn_, &QPushButton::toggled, this, &MainWindow::onToggleSpeed);
+    connect(countLineBtn_, &QPushButton::clicked, this, &MainWindow::onDrawCountingLine);
+    connect(clearLineBtn_, &QPushButton::clicked, this, &MainWindow::onClearCountingLine);
     connect(langBtn_, &QPushButton::clicked, this, &MainWindow::onToggleLanguage);
     connect(cameraCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onCameraChanged);
@@ -205,6 +228,7 @@ void MainWindow::setupUI()
     videoLabel_ = new QLabel;
     videoLabel_->setAlignment(Qt::AlignCenter);
     videoLabel_->setStyleSheet("QLabel { background-color: #1a1a1a; }");
+    videoLabel_->installEventFilter(this);
 
     // --- Layout ---
     QWidget* central = new QWidget;
@@ -236,20 +260,64 @@ void MainWindow::setupUI()
     auto* dockLayout = new QVBoxLayout(dockWidget);
     dockLayout->setContentsMargins(0, 0, 0, 0);
 
-    statsTable_ = new QTableWidget(0, 2, dockWidget);
+    statsTable_ = new QTableWidget(0, 3, dockWidget);
     statsTable_->setHorizontalHeaderLabels(
-        {Lang::s("stats_class"), Lang::s("stats_count")});
+        {Lang::s("stats_class"), Lang::s("stats_count"), Lang::s("stats_unique")});
     statsTable_->horizontalHeader()->setStretchLastSection(true);
     statsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     statsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
 
+    totalUniqueLabel_ = new QLabel(Lang::s("stats_total_unique").arg(0));
+
+    auto* statsBtnLayout = new QHBoxLayout;
     clearStatsBtn_ = new QPushButton(Lang::s("stats_clear"));
+    resetCountsBtn_ = new QPushButton(Lang::s("reset_counts"));
+    statsBtnLayout->addWidget(clearStatsBtn_);
+    statsBtnLayout->addWidget(resetCountsBtn_);
+
     dockLayout->addWidget(statsTable_);
-    dockLayout->addWidget(clearStatsBtn_);
+    dockLayout->addWidget(totalUniqueLabel_);
+    dockLayout->addLayout(statsBtnLayout);
     statsDock_->setWidget(dockWidget);
     addDockWidget(Qt::RightDockWidgetArea, statsDock_);
 
     connect(clearStatsBtn_, &QPushButton::clicked, this, &MainWindow::onClearStats);
+    connect(resetCountsBtn_, &QPushButton::clicked, this, [this]() {
+        thread_.resetTrackCounts();
+        uniqueCounts_.clear();
+        totalUniqueLabel_->setText(Lang::s("stats_total_unique").arg(0));
+        for (int r = 0; r < statsTable_->rowCount(); r++)
+            statsTable_->setItem(r, 2, new QTableWidgetItem("0"));
+    });
+
+    // --- Counting dock ---
+    countingDock_ = new QDockWidget(Lang::s("crossing_count"), this);
+    auto* countWidget = new QWidget;
+    auto* countLayout = new QVBoxLayout(countWidget);
+    countLayout->setContentsMargins(0, 0, 0, 0);
+
+    countingTable_ = new QTableWidget(0, 4, countWidget);
+    countingTable_->setHorizontalHeaderLabels(
+        {Lang::s("stats_class"), Lang::s("forward"), Lang::s("reverse"), Lang::s("total")});
+    countingTable_->horizontalHeader()->setStretchLastSection(true);
+    countingTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    countingTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+
+    auto* countBtnLayout = new QHBoxLayout;
+    clearCrossingBtn_ = new QPushButton(Lang::s("clear_line"));
+    countBtnLayout->addWidget(clearCrossingBtn_);
+
+    countLayout->addWidget(countingTable_);
+    countLayout->addLayout(countBtnLayout);
+    countingDock_->setWidget(countWidget);
+    addDockWidget(Qt::RightDockWidgetArea, countingDock_);
+    tabifyDockWidget(statsDock_, countingDock_);
+
+    connect(clearCrossingBtn_, &QPushButton::clicked, this, [this]() {
+        thread_.clearCountingLine();
+        thread_.resetCrossingCounts();
+        countingTable_->setRowCount(0);
+    });
 }
 
 void MainWindow::loadSettings()
@@ -274,6 +342,12 @@ void MainWindow::loadSettings()
 
     trackingBtn_->setChecked(tracking);
     thread_.setTrackingEnabled(tracking);
+    bool trajectory = settings.value("trajectory", false).toBool();
+    trajectoryBtn_->setChecked(trajectory);
+    thread_.setTrajectoryEnabled(trajectory);
+    bool speed = settings.value("speed", false).toBool();
+    speedBtn_->setChecked(speed);
+    thread_.setSpeedEnabled(speed);
     loopBtn_->setChecked(loop);
     thread_.setLoopEnabled(loop);
 
@@ -292,6 +366,11 @@ void MainWindow::loadSettings()
         statsDock_->show();
     else
         statsDock_->hide();
+
+    if (settings.value("countingDockVisible", false).toBool())
+        countingDock_->show();
+    else
+        countingDock_->hide();
 }
 
 void MainWindow::saveSettings()
@@ -304,9 +383,12 @@ void MainWindow::saveSettings()
     settings.setValue("windowPos", pos());
     settings.setValue("modelPath", currentModelPath_);
     settings.setValue("tracking", thread_.isTrackingEnabled());
+    settings.setValue("trajectory", thread_.isTrajectoryEnabled());
+    settings.setValue("speed", thread_.isSpeedEnabled());
     settings.setValue("loop", thread_.isLoopEnabled());
     settings.setValue("language", static_cast<int>(Lang::language()));
     settings.setValue("statsVisible", statsDock_->isVisible());
+    settings.setValue("countingDockVisible", countingDock_->isVisible());
     settings.setValue("recentModels", recentModels_);
 
     QList<QVariant> classList;
@@ -329,7 +411,10 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         onTogglePause();
         break;
     case Qt::Key_S:
-        onScreenshot();
+        if (event->modifiers() & Qt::ShiftModifier)
+            speedBtn_->toggle();
+        else
+            onScreenshot();
         break;
     case Qt::Key_O:
         onOpenVideo();
@@ -341,10 +426,16 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         onSwitchModel();
         break;
     case Qt::Key_T:
-        trackingBtn_->toggle();
+        if (event->modifiers() & Qt::ShiftModifier)
+            trajectoryBtn_->toggle();
+        else
+            trackingBtn_->toggle();
         break;
     case Qt::Key_L:
         loopBtn_->toggle();
+        break;
+    case Qt::Key_C:
+        onDrawCountingLine();
         break;
     case Qt::Key_E:
         onExport();
@@ -353,8 +444,15 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         isFullScreen() ? showNormal() : showFullScreen();
         break;
     case Qt::Key_Escape:
-        if (isFullScreen()) showNormal();
-        else close();
+        if (drawMode_ != DrawMode::Idle) {
+            drawMode_ = DrawMode::Idle;
+            videoLabel_->setCursor(Qt::ArrowCursor);
+            statusBar()->showMessage(Lang::s("draw_cancelled"), 3000);
+        } else if (isFullScreen()) {
+            showNormal();
+        } else {
+            close();
+        }
         break;
     default:
         QMainWindow::keyPressEvent(event);
@@ -388,6 +486,65 @@ void MainWindow::dropEvent(QDropEvent* event)
     }
 }
 
+QPoint MainWindow::widgetToFrameCoords(const QPoint& widgetPos) const
+{
+    QPixmap pm = videoLabel_->pixmap();
+    if (pm.isNull()) return QPoint();
+
+    int pw = pm.width(), ph = pm.height();
+    int lw = videoLabel_->width(), lh = videoLabel_->height();
+    int offsetX = (lw - pw) / 2;
+    int offsetY = (lh - ph) / 2;
+
+    int px = widgetPos.x() - offsetX;
+    int py = widgetPos.y() - offsetY;
+    if (px < 0 || py < 0 || px >= pw || py >= ph)
+        return QPoint();
+
+    QSize frameSz = thread_.frameSize();
+    if (frameSz.isEmpty()) return QPoint();
+
+    return QPoint(px * frameSz.width() / pw, py * frameSz.height() / ph);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == videoLabel_ && event->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::LeftButton && drawMode_ != DrawMode::Idle) {
+            QPoint framePt = widgetToFrameCoords(me->pos());
+            if (framePt.isNull()) return true;
+
+            if (drawMode_ == DrawMode::WaitingPt1) {
+                drawPt1_ = cv::Point(framePt.x(), framePt.y());
+                drawMode_ = DrawMode::WaitingPt2;
+                statusBar()->showMessage(Lang::s("click_pt2"), 10000);
+            } else if (drawMode_ == DrawMode::WaitingPt2) {
+                cv::Point pt2(framePt.x(), framePt.y());
+                drawMode_ = DrawMode::Idle;
+                videoLabel_->setCursor(Qt::ArrowCursor);
+
+                bool ok;
+                QString label = QInputDialog::getText(this, Lang::s("counting_line"),
+                    Lang::s("line_label_prompt"), QLineEdit::Normal, "", &ok);
+                if (!ok) {
+                    statusBar()->showMessage(Lang::s("draw_cancelled"), 3000);
+                    return true;
+                }
+
+                CountingLine line;
+                line.pt1 = drawPt1_;
+                line.pt2 = pt2;
+                line.label = label.toStdString();
+                thread_.setCountingLine(line);
+                statusBar()->showMessage(Lang::s("line_set"), 3000);
+            }
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 // --- Slots ---
 
 void MainWindow::onFrameReady(const QImage& image, int detCount, float fps,
@@ -407,12 +564,21 @@ void MainWindow::onFrameReady(const QImage& image, int detCount, float fps,
         classStats_[it.key()] += it.value();
 
     if (statsDock_->isVisible()) {
-        statsTable_->setRowCount(classStats_.size());
+        QSet<int> allClasses;
+        for (auto it = classStats_.constBegin(); it != classStats_.constEnd(); ++it)
+            allClasses.insert(it.key());
+        for (auto it = uniqueCounts_.constBegin(); it != uniqueCounts_.constEnd(); ++it)
+            allClasses.insert(it.key());
+
+        statsTable_->setRowCount(allClasses.size());
         int row = 0;
-        for (auto it = classStats_.constBegin(); it != classStats_.constEnd(); ++it) {
+        for (int cls : allClasses) {
             statsTable_->setItem(row, 0,
-                new QTableWidgetItem(QString::fromStdString(YOLODetector::CLASS_NAMES[it.key()])));
-            statsTable_->setItem(row, 1, new QTableWidgetItem(QString::number(it.value())));
+                new QTableWidgetItem(QString::fromStdString(YOLODetector::CLASS_NAMES[cls])));
+            statsTable_->setItem(row, 1,
+                new QTableWidgetItem(QString::number(classStats_.value(cls, 0))));
+            statsTable_->setItem(row, 2,
+                new QTableWidgetItem(QString::number(uniqueCounts_.value(cls, 0))));
             row++;
         }
     }
@@ -436,7 +602,7 @@ void MainWindow::onScreenshot()
 
     QString defaultName = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".png";
     QString path = QFileDialog::getSaveFileName(this, Lang::s("save_screenshot"),
-        defaultName, Lang::s("image_filter"));
+        defaultName, Lang::s("image_filter"), nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
 
     if (lastFrame_.save(path))
@@ -448,7 +614,7 @@ void MainWindow::onScreenshot()
 void MainWindow::onOpenVideo()
 {
     QString path = QFileDialog::getOpenFileName(this, Lang::s("open_video_title"),
-        "", Lang::s("video_filter"));
+        "", Lang::s("video_filter"), nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
     openVideoFile(path);
 }
@@ -458,7 +624,7 @@ void MainWindow::openVideoFile(const QString& path)
     thread_.stop();
     thread_.wait();
 
-    if (!thread_.openVideo(path.toStdString())) {
+    if (!thread_.openVideo(path.toLocal8Bit().toStdString())) {
         QMessageBox::warning(this, Lang::s("error"), Lang::s("video_open_fail"));
         return;
     }
@@ -512,7 +678,7 @@ void MainWindow::onToggleRecord()
     } else {
         QString defaultName = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".mp4";
         QString path = QFileDialog::getSaveFileName(this, Lang::s("save_recording"),
-            defaultName, Lang::s("video_save_filter"));
+            defaultName, Lang::s("video_save_filter"), nullptr, QFileDialog::DontUseNativeDialog);
         if (path.isEmpty()) return;
 
         QSize sz = thread_.frameSize();
@@ -558,7 +724,8 @@ void MainWindow::onSwitchModel()
 {
     QString dir = QFileInfo(currentModelPath_).absolutePath();
     QString path = QFileDialog::getOpenFileName(this,
-        Lang::s("select_model"), dir, Lang::s("model_filter"));
+        Lang::s("select_model"), dir, Lang::s("model_filter"),
+        nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
     loadModelFile(path);
 }
@@ -614,10 +781,67 @@ void MainWindow::onToggleTracking(bool checked)
         thread_.wait();
         thread_.resetTracker();
         thread_.start();
+        uniqueCounts_.clear();
+        countingTable_->setRowCount(0);
     }
     trackingBtn_->setText(checked ? Lang::s("tracking_on") : Lang::s("tracking_off"));
     statusBar()->showMessage(
         checked ? Lang::s("tracking_enabled") : Lang::s("tracking_disabled"), 2000);
+}
+
+void MainWindow::onToggleTrajectory(bool checked)
+{
+    thread_.setTrajectoryEnabled(checked);
+    trajectoryBtn_->setText(checked ? Lang::s("trajectory_on") : Lang::s("trajectory_off"));
+    statusBar()->showMessage(
+        checked ? Lang::s("trajectory_on") : Lang::s("trajectory_off"), 2000);
+}
+
+void MainWindow::onToggleSpeed(bool checked)
+{
+    thread_.setSpeedEnabled(checked);
+    speedBtn_->setText(checked ? Lang::s("speed_on") : Lang::s("speed_off"));
+    statusBar()->showMessage(
+        checked ? Lang::s("speed_on") : Lang::s("speed_off"), 2000);
+}
+
+void MainWindow::onTrackingStatsUpdated(const QMap<int,int>& uniqueCounts, int totalUnique)
+{
+    uniqueCounts_ = uniqueCounts;
+    totalUniqueLabel_->setText(Lang::s("stats_total_unique").arg(totalUnique));
+}
+
+void MainWindow::onDrawCountingLine()
+{
+    drawMode_ = DrawMode::WaitingPt1;
+    videoLabel_->setCursor(Qt::CrossCursor);
+    statusBar()->showMessage(Lang::s("click_pt1"), 10000);
+}
+
+void MainWindow::onClearCountingLine()
+{
+    thread_.clearCountingLine();
+    thread_.resetCrossingCounts();
+    countingTable_->setRowCount(0);
+    statusBar()->showMessage(Lang::s("line_cleared"), 3000);
+}
+
+void MainWindow::onCrossingStatsUpdated(const QMap<int, QMap<int, int>>& counts)
+{
+    if (!countingDock_->isVisible()) return;
+
+    countingTable_->setRowCount(counts.size());
+    int row = 0;
+    for (auto it = counts.constBegin(); it != counts.constEnd(); ++it) {
+        int fwd = it.value().value(1, 0);
+        int rev = it.value().value(-1, 0);
+        countingTable_->setItem(row, 0,
+            new QTableWidgetItem(QString::fromStdString(YOLODetector::CLASS_NAMES[it.key()])));
+        countingTable_->setItem(row, 1, new QTableWidgetItem(QString::number(fwd)));
+        countingTable_->setItem(row, 2, new QTableWidgetItem(QString::number(rev)));
+        countingTable_->setItem(row, 3, new QTableWidgetItem(QString::number(fwd + rev)));
+        row++;
+    }
 }
 
 void MainWindow::onToggleLoop(bool checked)
@@ -629,62 +853,167 @@ void MainWindow::onToggleLoop(bool checked)
 
 void MainWindow::onExport()
 {
-    auto dets = thread_.lastDetections();
-    if (dets.empty()) {
-        QMessageBox::information(this, Lang::s("export_title"), Lang::s("export_no_data"));
-        return;
+    // Show choice dialog when tracking is enabled
+    bool exportTracking = false;
+    if (thread_.isTrackingEnabled()) {
+        QMessageBox choiceDlg(QMessageBox::Question, Lang::s("export_choice"),
+            Lang::s("export_choice"), QMessageBox::NoButton, this);
+        QPushButton* detBtn = choiceDlg.addButton(Lang::s("export_detect"), QMessageBox::AcceptRole);
+        QPushButton* trackBtn = choiceDlg.addButton(Lang::s("export_tracking"), QMessageBox::AcceptRole);
+        QPushButton* cancelBtn = choiceDlg.addButton(QMessageBox::Cancel);
+        choiceDlg.exec();
+        if (choiceDlg.clickedButton() == cancelBtn) return;
+        exportTracking = (choiceDlg.clickedButton() == trackBtn);
     }
 
-    QString path = QFileDialog::getSaveFileName(this, Lang::s("export_title"),
-        QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"),
-        Lang::s("export_filter"));
-    if (path.isEmpty()) return;
+    if (exportTracking) {
+        // Export tracking data
+        auto history = thread_.trackHistory();
+        auto uniqueCounts = thread_.isTrackingEnabled() ? uniqueCounts_ : QMap<int,int>();
 
-    bool success = false;
-    if (path.endsWith(".csv", Qt::CaseInsensitive)) {
-        QFile file(path);
-        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&file);
-            out << "class,classId,confidence,x,y,width,height\n";
-            for (const auto& d : dets) {
-                out << QString::fromStdString(YOLODetector::CLASS_NAMES[d.classId]) << ","
-                    << d.classId << ","
-                    << QString::number(d.confidence, 'f', 4) << ","
-                    << d.bbox.x << "," << d.bbox.y << ","
-                    << d.bbox.width << "," << d.bbox.height << "\n";
+        if (history.empty()) {
+            QMessageBox::information(this, Lang::s("export_tracks"), Lang::s("export_track_no_data"));
+            return;
+        }
+
+        QString defaultName = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + "_tracks";
+        QString path = QFileDialog::getSaveFileName(this, Lang::s("export_tracks"),
+            defaultName, Lang::s("export_track_filter"), nullptr, QFileDialog::DontUseNativeDialog);
+        if (path.isEmpty()) return;
+
+        bool success = false;
+        if (path.endsWith(".csv", Qt::CaseInsensitive)) {
+            QFile file(path);
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&file);
+                out << "trackId,class,classId,timestamp,x,y,width,height,speed,angle\n";
+                for (const auto& r : history) {
+                    QDateTime dt = QDateTime::fromMSecsSinceEpoch(r.timestampMs);
+                    out << r.trackId << ","
+                        << QString::fromStdString(YOLODetector::CLASS_NAMES[r.classId]) << ","
+                        << r.classId << ","
+                        << dt.toString("yyyy-MM-ddTHH:mm:ss.zzz") << ","
+                        << r.x << "," << r.y << ","
+                        << r.width << "," << r.height << ","
+                        << QString::number(r.speed, 'f', 2) << ","
+                        << QString::number(r.angle, 'f', 1) << "\n";
+                }
+                success = true;
             }
-            success = true;
+        } else {
+            // Build JSON with tracks grouped by trackId
+            QJsonObject root;
+            root["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+
+            // Group records by trackId
+            QMap<int, QJsonArray> trackPoints;
+            for (const auto& r : history) {
+                QJsonObject pt;
+                pt["t"] = QDateTime::fromMSecsSinceEpoch(r.timestampMs).toString(Qt::ISODate);
+                pt["x"] = r.x;
+                pt["y"] = r.y;
+                pt["w"] = r.width;
+                pt["h"] = r.height;
+                pt["speed"] = qRound(r.speed * 100) / 100.0;
+                pt["angle"] = qRound(r.angle * 10) / 10.0;
+                trackPoints[r.trackId].append(pt);
+            }
+
+            // Build tracks array with class info from first record
+            QMap<int, int> trackClassMap;
+            for (const auto& r : history) {
+                if (!trackClassMap.contains(r.trackId))
+                    trackClassMap[r.trackId] = r.classId;
+            }
+
+            QJsonArray tracksArr;
+            for (auto it = trackPoints.constBegin(); it != trackPoints.constEnd(); ++it) {
+                QJsonObject tObj;
+                tObj["trackId"] = it.key();
+                int cid = trackClassMap.value(it.key(), 0);
+                tObj["class"] = QString::fromStdString(YOLODetector::CLASS_NAMES[cid]);
+                tObj["classId"] = cid;
+                tObj["points"] = it.value();
+                tracksArr.append(tObj);
+            }
+            root["tracks"] = tracksArr;
+
+            // Unique counts
+            QJsonObject ucObj;
+            for (auto it = uniqueCounts.constBegin(); it != uniqueCounts.constEnd(); ++it)
+                ucObj[QString::fromStdString(YOLODetector::CLASS_NAMES[it.key()])] = it.value();
+            root["uniqueCounts"] = ucObj;
+
+            QFile file(path);
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+                success = true;
+            }
         }
+
+        if (success)
+            statusBar()->showMessage(Lang::s("export_track_done") + path, 3000);
+        else
+            QMessageBox::warning(this, Lang::s("error"), Lang::s("export_fail"));
     } else {
-        QJsonObject root;
-        root["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-        QJsonArray arr;
-        for (const auto& d : dets) {
-            QJsonObject obj;
-            obj["class"] = QString::fromStdString(YOLODetector::CLASS_NAMES[d.classId]);
-            obj["classId"] = d.classId;
-            obj["confidence"] = qRound(d.confidence * 10000) / 10000.0;
-            QJsonArray bbox;
-            bbox.append(d.bbox.x);
-            bbox.append(d.bbox.y);
-            bbox.append(d.bbox.width);
-            bbox.append(d.bbox.height);
-            obj["bbox"] = bbox;
-            arr.append(obj);
+        // Export detections (original behavior)
+        auto dets = thread_.lastDetections();
+        if (dets.empty()) {
+            QMessageBox::information(this, Lang::s("export_title"), Lang::s("export_no_data"));
+            return;
         }
-        root["detections"] = arr;
 
-        QFile file(path);
-        if (file.open(QIODevice::WriteOnly)) {
-            file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-            success = true;
+        QString path = QFileDialog::getSaveFileName(this, Lang::s("export_title"),
+            QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"),
+            Lang::s("export_filter"), nullptr, QFileDialog::DontUseNativeDialog);
+        if (path.isEmpty()) return;
+
+        bool success = false;
+        if (path.endsWith(".csv", Qt::CaseInsensitive)) {
+            QFile file(path);
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&file);
+                out << "class,classId,confidence,x,y,width,height\n";
+                for (const auto& d : dets) {
+                    out << QString::fromStdString(YOLODetector::CLASS_NAMES[d.classId]) << ","
+                        << d.classId << ","
+                        << QString::number(d.confidence, 'f', 4) << ","
+                        << d.bbox.x << "," << d.bbox.y << ","
+                        << d.bbox.width << "," << d.bbox.height << "\n";
+                }
+                success = true;
+            }
+        } else {
+            QJsonObject root;
+            root["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+            QJsonArray arr;
+            for (const auto& d : dets) {
+                QJsonObject obj;
+                obj["class"] = QString::fromStdString(YOLODetector::CLASS_NAMES[d.classId]);
+                obj["classId"] = d.classId;
+                obj["confidence"] = qRound(d.confidence * 10000) / 10000.0;
+                QJsonArray bbox;
+                bbox.append(d.bbox.x);
+                bbox.append(d.bbox.y);
+                bbox.append(d.bbox.width);
+                bbox.append(d.bbox.height);
+                obj["bbox"] = bbox;
+                arr.append(obj);
+            }
+            root["detections"] = arr;
+
+            QFile file(path);
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+                success = true;
+            }
         }
+
+        if (success)
+            statusBar()->showMessage(Lang::s("export_done") + path, 3000);
+        else
+            QMessageBox::warning(this, Lang::s("error"), Lang::s("export_fail"));
     }
-
-    if (success)
-        statusBar()->showMessage(Lang::s("export_done") + path, 3000);
-    else
-        QMessageBox::warning(this, Lang::s("error"), Lang::s("export_fail"));
 }
 
 void MainWindow::onToggleLanguage()
@@ -721,8 +1050,14 @@ void MainWindow::refreshUIText()
     recentModelBtn_->setText(Lang::s("recent_models"));
     classFilterBtn_->setText(Lang::s("class_filter"));
     trackingBtn_->setText(trackingBtn_->isChecked() ? Lang::s("tracking_on") : Lang::s("tracking_off"));
+    trajectoryBtn_->setText(trajectoryBtn_->isChecked() ? Lang::s("trajectory_on") : Lang::s("trajectory_off"));
+    speedBtn_->setText(speedBtn_->isChecked() ? Lang::s("speed_on") : Lang::s("speed_off"));
+    countLineBtn_->setText(Lang::s("draw_line"));
+    clearLineBtn_->setText(Lang::s("clear_line"));
     langBtn_->setText(Lang::s("lang_toggle"));
     clearStatsBtn_->setText(Lang::s("stats_clear"));
+    resetCountsBtn_->setText(Lang::s("reset_counts"));
+    clearCrossingBtn_->setText(Lang::s("clear_line"));
     deviceLabel_->setText(thread_.detector().isGpuEnabled()
         ? Lang::s("device_gpu") : Lang::s("device_cpu"));
 
@@ -736,11 +1071,21 @@ void MainWindow::refreshUIText()
     switchModelBtn_->setToolTip(Lang::s("tip_model"));
     classFilterBtn_->setToolTip(Lang::s("tip_filter"));
     trackingBtn_->setToolTip(Lang::s("tip_tracking"));
+    trajectoryBtn_->setToolTip(Lang::s("tip_trajectory"));
+    speedBtn_->setToolTip(Lang::s("tip_speed"));
+    countLineBtn_->setToolTip(Lang::s("tip_draw_line"));
+    clearLineBtn_->setToolTip(Lang::s("tip_clear_line"));
     langBtn_->setToolTip(Lang::s("tip_lang"));
 
     statsDock_->setWindowTitle(Lang::s("stats_title"));
     statsTable_->setHorizontalHeaderLabels(
-        {Lang::s("stats_class"), Lang::s("stats_count")});
+        {Lang::s("stats_class"), Lang::s("stats_count"), Lang::s("stats_unique")});
+    totalUniqueLabel_->setText(Lang::s("stats_total_unique").arg(
+        [] (const QMap<int,int>& m) { int t=0; for (auto v : m) t += v; return t; } (uniqueCounts_)));
+
+    countingDock_->setWindowTitle(Lang::s("crossing_count"));
+    countingTable_->setHorizontalHeaderLabels(
+        {Lang::s("stats_class"), Lang::s("forward"), Lang::s("reverse"), Lang::s("total")});
 
     // Refresh camera combo
     int curCam = cameraCombo_->currentData().toInt();

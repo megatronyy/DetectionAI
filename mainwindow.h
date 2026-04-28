@@ -13,6 +13,7 @@
 #include <QDockWidget>
 #include <QTableWidget>
 #include <QInputDialog>
+#include <QMouseEvent>
 #include "inferencethread.h"
 
 class MainWindow : public QMainWindow
@@ -27,6 +28,7 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void onFrameReady(const QImage& image, int detCount, float fps,
@@ -44,6 +46,12 @@ private slots:
     void onClassFilter();
     void onToggleTracking(bool checked);
     void onToggleLoop(bool checked);
+    void onToggleTrajectory(bool checked);
+    void onToggleSpeed(bool checked);
+    void onTrackingStatsUpdated(const QMap<int,int>& uniqueCounts, int totalUnique);
+    void onDrawCountingLine();
+    void onClearCountingLine();
+    void onCrossingStatsUpdated(const QMap<int, QMap<int, int>>& counts);
     void onExport();
     void onToggleLanguage();
     void onAbout();
@@ -63,6 +71,10 @@ private:
     QPushButton* recentModelBtn_;
     QPushButton* classFilterBtn_;
     QPushButton* trackingBtn_;
+    QPushButton* trajectoryBtn_;
+    QPushButton* speedBtn_;
+    QPushButton* countLineBtn_;
+    QPushButton* clearLineBtn_;
     QPushButton* langBtn_;
     QComboBox* cameraCombo_;
     QSlider* confSlider_;
@@ -76,6 +88,17 @@ private:
     QDockWidget* statsDock_;
     QTableWidget* statsTable_;
     QPushButton* clearStatsBtn_;
+    QPushButton* resetCountsBtn_;
+    QLabel* totalUniqueLabel_;
+    QMap<int, int> uniqueCounts_;
+
+    QDockWidget* countingDock_;
+    QTableWidget* countingTable_;
+    QPushButton* clearCrossingBtn_;
+
+    enum class DrawMode { Idle, WaitingPt1, WaitingPt2 };
+    DrawMode drawMode_ = DrawMode::Idle;
+    cv::Point drawPt1_;
 
     InferenceThread thread_;
     QImage lastFrame_;
@@ -90,6 +113,7 @@ private:
     void saveSettings();
     void enumerateCameras();
     void refreshUIText();
+    QPoint widgetToFrameCoords(const QPoint& widgetPos) const;
     void addRecentModel(const QString& path);
     void openVideoFile(const QString& path);
     void loadModelFile(const QString& path);

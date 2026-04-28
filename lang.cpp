@@ -96,6 +96,8 @@ static const struct { const char* key; const char* zh; const char* en; } strings
     {"stats_title",     "检测统计",                     "Detection Statistics"},
     {"stats_class",     "类别",                        "Class"},
     {"stats_count",     "次数",                        "Count"},
+    {"stats_unique",    "唯一",                        "Unique"},
+    {"stats_total_unique", "唯一目标总计: %1",          "Total unique: %1"},
 
     // Export
     {"export_title",    "导出检测结果",                  "Export Detections"},
@@ -103,6 +105,15 @@ static const struct { const char* key; const char* zh; const char* en; } strings
     {"export_done",     "检测结果已导出: ",              "Detections exported: "},
     {"export_fail",     "导出检测结果失败。",             "Failed to export detections."},
     {"export_no_data",  "当前无检测结果可导出。",          "No detections to export."},
+
+    // Tracking export
+    {"export_tracks",     "导出追踪数据",               "Export Tracking Data"},
+    {"export_track_filter","追踪数据 (*.json *.csv)",    "Tracking Data (*.json *.csv)"},
+    {"export_track_done", "追踪数据已导出: ",            "Tracking data exported: "},
+    {"export_track_no_data","当前无追踪数据可导出。",     "No tracking data to export."},
+    {"export_choice",     "选择导出内容",               "Choose Export Content"},
+    {"export_detect",     "检测结果",                   "Detections"},
+    {"export_tracking",   "追踪数据",                   "Tracking Data"},
 
     // Errors
     {"error",           "错误",                        "Error"},
@@ -146,6 +157,34 @@ static const struct { const char* key; const char* zh; const char* en; } strings
 
     // Stats clear
     {"stats_clear",     "清零统计",                     "Clear Stats"},
+    {"reset_counts",    "重置计数",                     "Reset Counts"},
+
+    // Trajectory
+    {"trajectory_on",   "隐藏轨迹",                     "Hide Trail"},
+    {"trajectory_off",  "显示轨迹",                     "Trail"},
+    {"tip_trajectory",  "显示运动轨迹",                  "Show motion trail"},
+
+    // Speed & direction
+    {"speed_on",        "隐藏速度",                     "Hide Speed"},
+    {"speed_off",       "速度方向",                     "Speed"},
+    {"tip_speed",       "显示速度与方向 (Shift+S)",      "Show speed & direction (Shift+S)"},
+
+    // Line crossing counting
+    {"counting_line",   "越线计数",                     "Line Crossing"},
+    {"draw_line",       "画计数线",                     "Draw Line"},
+    {"clear_line",      "清除计数线",                   "Clear Line"},
+    {"line_label_prompt","输入线段标签:",                "Enter line label:"},
+    {"crossing_count",  "越线统计",                     "Crossing Count"},
+    {"forward",         "正向",                        "Forward"},
+    {"reverse",         "反向",                        "Reverse"},
+    {"total",           "合计",                        "Total"},
+    {"click_pt1",       "点击画面设置第一个点",           "Click to set first point"},
+    {"click_pt2",       "点击画面设置第二个点",           "Click to set second point"},
+    {"line_set",        "计数线已设置",                  "Counting line set"},
+    {"line_cleared",    "计数线已清除",                  "Counting line cleared"},
+    {"draw_cancelled",  "画线已取消",                    "Drawing cancelled"},
+    {"tip_draw_line",   "在画面上画一条计数线 (C)",       "Draw a counting line (C)"},
+    {"tip_clear_line",  "清除计数线并重置计数",            "Clear line and reset counts"},
 
     {nullptr, nullptr, nullptr}
 };

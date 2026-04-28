@@ -11,7 +11,59 @@ void Tracker::reset()
 {
     tracks_.clear();
     nextId_ = 0;
+    seenIdsByClass_.clear();
 }
+
+void Tracker::resetCounts()
+{
+    seenIdsByClass_.clear();
+}
+
+QMap<int, int> Tracker::uniqueCounts() const
+{
+    QMap<int, int> counts;
+    for (auto it = seenIdsByClass_.constBegin(); it != seenIdsByClass_.constEnd(); ++it)
+        counts[it.key()] = it.value().size();
+    return counts;
+}
+
+int Tracker::totalUnique() const
+{
+    int total = 0;
+    for (auto it = seenIdsByClass_.constBegin(); it != seenIdsByClass_.constEnd(); ++it)
+        total += it.value().size();
+    return total;
+}
+
+void Tracker::setCountingLine(const CountingLine& line)
+{
+    countLine_ = line;
+    hasLine_ = true;
+    for (auto& t : tracks_) {
+        cv::Point center(t.lastBbox.x + t.lastBbox.width / 2,
+                         t.lastBbox.y + t.lastBbox.height / 2);
+        t.lastSide = sideOfLine(center, countLine_);
+    }
+}
+
+void Tracker::clearCountingLine()
+{
+    hasLine_ = false;
+    countLine_ = CountingLine();
+    for (auto& t : tracks_) t.lastSide = 0;
+}
+
+bool Tracker::hasCountingLine() const { return hasLine_; }
+CountingLine Tracker::countingLine() const { return countLine_; }
+QMap<int, QMap<int, int>> Tracker::crossingCountsByDir() const { return crossingCountsByDir_; }
+
+void Tracker::resetCrossingCounts()
+{
+    crossings_.clear();
+    crossingCountsByDir_.clear();
+}
+
+void Tracker::setCurrentTime(int64_t ms) { currentTimeMs_ = ms; }
 
 float Tracker::computeIoU(const cv::Rect& a, const cv::Rect& b)
 {
@@ -23,6 +75,15 @@ float Tracker::computeIoU(const cv::Rect& a, const cv::Rect& b)
     int inter = std::max(0, x2 - x1) * std::max(0, y2 - y1);
     int unionArea = a.width * a.height + b.width * b.height - inter;
     return unionArea > 0 ? (float)inter / unionArea : 0.f;
+}
+
+int Tracker::sideOfLine(const cv::Point& p, const CountingLine& line)
+{
+    long long cross = (long long)(line.pt2.x - line.pt1.x) * (p.y - line.pt1.y)
+                    - (long long)(line.pt2.y - line.pt1.y) * (p.x - line.pt1.x);
+    if (cross > 0) return 1;
+    if (cross < 0) return -1;
+    return 0;
 }
 
 cv::Mat Tracker::bboxToMeasurement(const cv::Rect& bbox)
@@ -211,6 +272,25 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
             tracks_[i].confidence = detections[j].confidence;
             tracks_[i].hits++;
             tracks_[i].missedFrames = 0;
+            cv::Point center(detections[j].bbox.x + detections[j].bbox.width / 2,
+                             detections[j].bbox.y + detections[j].bbox.height / 2);
+            tracks_[i].trajectory.push_back(center);
+            if ((int)tracks_[i].trajectory.size() > MAX_TRAJECTORY_LEN)
+                tracks_[i].trajectory.erase(tracks_[i].trajectory.begin());
+
+            if (hasLine_) {
+                int currentSide = sideOfLine(center, countLine_);
+                if (tracks_[i].lastSide != 0 && currentSide != 0 && currentSide != tracks_[i].lastSide) {
+                    CrossingEvent evt;
+                    evt.trackId = tracks_[i].trackId;
+                    evt.classId = tracks_[i].classId;
+                    evt.direction = currentSide;
+                    evt.timestampMs = currentTimeMs_;
+                    crossings_.push_back(evt);
+                    crossingCountsByDir_[tracks_[i].classId][currentSide]++;
+                }
+                tracks_[i].lastSide = currentSide;
+            }
         } else {
             tracks_[i].missedFrames++;
         }
@@ -233,7 +313,17 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
             t.lastBbox = detections[j].bbox;
             t.classId = detections[j].classId;
             t.confidence = detections[j].confidence;
+            cv::Point center(detections[j].bbox.x + detections[j].bbox.width / 2,
+                             detections[j].bbox.y + detections[j].bbox.height / 2);
+            t.trajectory.push_back(center);
             tracks_.push_back(t);
+            seenIdsByClass_[detections[j].classId].insert(t.trackId);
+
+            if (hasLine_) {
+                cv::Point tc(detections[j].bbox.x + detections[j].bbox.width / 2,
+                             detections[j].bbox.y + detections[j].bbox.height / 2);
+                tracks_.back().lastSide = sideOfLine(tc, countLine_);
+            }
         }
     }
 
@@ -242,7 +332,12 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
     result.reserve(tracks_.size());
     for (const auto& t : tracks_) {
         if (t.hits >= minHits_ && t.missedFrames == 0) {
-            result.push_back({{t.classId, t.confidence, t.lastBbox}, t.trackId});
+            float vx = t.kf.statePost.at<float>(4);
+            float vy = t.kf.statePost.at<float>(5);
+            float speed = std::sqrt(vx * vx + vy * vy);
+            float angle = std::atan2(vy, vx) * 180.f / (float)CV_PI;
+            if (angle < 0) angle += 360.f;
+            result.push_back({{t.classId, t.confidence, t.lastBbox}, t.trackId, t.trajectory, speed, angle});
         }
     }
     return result;

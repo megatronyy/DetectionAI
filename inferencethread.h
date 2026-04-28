@@ -10,6 +10,14 @@
 #include <atomic>
 #include <mutex>
 
+struct TrackRecord {
+    int trackId;
+    int classId;
+    int64_t timestampMs;
+    int x, y, width, height;
+    float speed, angle;
+};
+
 class InferenceThread : public QThread
 {
     Q_OBJECT
@@ -32,16 +40,34 @@ public:
     void setTrackingEnabled(bool enabled);
     bool isTrackingEnabled() const;
     void resetTracker();
+    void resetTrackCounts();
+
+    void setTrajectoryEnabled(bool enabled);
+    bool isTrajectoryEnabled() const;
+
+    void setSpeedEnabled(bool enabled);
+    bool isSpeedEnabled() const;
+
+    void setCountingLine(const CountingLine& line);
+    void clearCountingLine();
+    bool hasCountingLine() const;
+    QMap<int, QMap<int, int>> crossingCountsByDir() const;
+    void resetCrossingCounts();
 
     void setLoopEnabled(bool enabled);
     bool isLoopEnabled() const;
     QSize frameSize() const;
     std::vector<Detection> lastDetections() const;
 
+    std::vector<TrackRecord> trackHistory() const;
+    void clearTrackHistory();
+
 signals:
     void frameReady(const QImage& image, int detectionCount, float fps,
                     float inferMs, const QMap<int,int>& classCounts);
     void inputLost(const QString& msg);
+    void trackingStatsUpdated(const QMap<int,int>& uniqueCounts, int totalUnique);
+    void crossingStatsUpdated(const QMap<int, QMap<int, int>>& counts);
 
 protected:
     void run() override;
@@ -57,15 +83,22 @@ private:
     std::atomic<bool> isVideo_{false};
     std::atomic<bool> recording_{false};
     std::atomic<bool> trackingEnabled_{false};
+    std::atomic<bool> trajectoryEnabled_{false};
+    std::atomic<bool> speedEnabled_{false};
     std::atomic<bool> loopEnabled_{false};
 
     cv::Mat currentFrame_;
     QSize lastFrameSize_;
     std::vector<Detection> lastDetections_;
     mutable std::mutex detectionsMutex_;
+    std::vector<TrackRecord> trackHistory_;
+    mutable std::mutex historyMutex_;
+    static const int MAX_HISTORY = 500000;
 
     void drawDetections(cv::Mat& frame, const std::vector<Detection>& dets);
     void drawTracks(cv::Mat& frame, const std::vector<Track>& tracks);
+    void drawTrajectory(cv::Mat& frame, const std::vector<Track>& tracks);
+    void drawCountingLine(cv::Mat& frame);
     static void drawLabel(cv::Mat& frame, const cv::Rect& bbox, int classId, const std::string& label);
     static cv::Scalar classColor(int classId);
 };
