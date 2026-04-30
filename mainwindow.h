@@ -12,6 +12,9 @@
 #include <QDropEvent>
 #include <QDockWidget>
 #include <QTableWidget>
+#include <QTabWidget>
+#include <QAction>
+#include <QMenu>
 #include <QInputDialog>
 #include <QMouseEvent>
 #include "inferencethread.h"
@@ -66,71 +69,97 @@ private slots:
     void onAbout();
     void onClearStats();
     void onRecentModel();
+    void onToggleFullScreen();
 
 private:
+    // Central display
     QLabel* videoLabel_;
-    QPushButton* pauseBtn_;
-    QPushButton* screenshotBtn_;
-    QPushButton* videoBtn_;
-    QPushButton* recordBtn_;
-    QPushButton* exportBtn_;
-    QPushButton* networkCamBtn_;
-    QPushButton* loopBtn_;
-    QPushButton* switchModelBtn_;
-    QPushButton* recentModelBtn_;
-    QPushButton* classFilterBtn_;
-    QPushButton* trackingBtn_;
-    QPushButton* trajectoryBtn_;
-    QPushButton* speedBtn_;
-    QPushButton* skeletonBtn_;
-    QPushButton* stereoBtn_;
-    QPushButton* calibrateBtn_;
-    QPushButton* depthOverlayBtn_;
-    QPushButton* stereoSettingsBtn_;
-    QPushButton* countLineBtn_;
-    QPushButton* clearLineBtn_;
-    QPushButton* langBtn_;
     QComboBox* cameraCombo_;
+
+    // Sliders
     QSlider* confSlider_;
     QLabel* confValueLabel_;
     QSlider* iouSlider_;
     QLabel* iouValueLabel_;
+
+    // Status bar
     QLabel* fpsLabel_;
     QLabel* detLabel_;
     QLabel* inferLabel_;
     QLabel* deviceLabel_;
-    QDockWidget* statsDock_;
+
+    // Menus
+    QMenu* fileMenu_;
+    QMenu* modelMenu_;
+    QMenu* playbackMenu_;
+    QMenu* trackingMenu_;
+    QMenu* stereoMenu_;
+    QMenu* viewMenu_;
+    QMenu* helpMenu_;
+    QMenu* recentModelsMenu_;
+
+    // Actions
+    QAction* actPause_;
+    QAction* actScreenshot_;
+    QAction* actRecord_;
+    QAction* actExport_;
+    QAction* actOpenVideo_;
+    QAction* actNetworkCam_;
+    QAction* actLoop_;
+    QAction* actSwitchModel_;
+    QAction* actClassFilter_;
+    QAction* actTracking_;
+    QAction* actTrajectory_;
+    QAction* actSpeed_;
+    QAction* actSkeleton_;
+    QAction* actStereo_;
+    QAction* actDepthOverlay_;
+    QAction* actCalibrate_;
+    QAction* actStereoSettings_;
+    QAction* actCountLine_;
+    QAction* actClearLine_;
+    QAction* actLanguage_;
+    QAction* actFullScreen_;
+    QAction* actExit_;
+
+    // Unified right panel
+    QDockWidget* panelDock_;
+    QTabWidget* panelTabs_;
+    QWidget* statsPage_;
+    QWidget* trackingPage_;
+    QWidget* posePage_;
+    QWidget* depthPage_;
+
+    // Tables (inside tabs)
     QTableWidget* statsTable_;
-    QPushButton* clearStatsBtn_;
-    QPushButton* resetCountsBtn_;
-    QLabel* totalUniqueLabel_;
-    QMap<int, int> uniqueCounts_;
-
-    QDockWidget* countingDock_;
     QTableWidget* countingTable_;
-    QPushButton* clearCrossingBtn_;
-
-    QDockWidget* poseDock_;
     QTableWidget* poseTable_;
+    QTableWidget* depthTable_;
+
+    // Stats page widgets
+    QLabel* totalUniqueLabel_;
+
+    // Pose page widgets
     QLabel* posePersonLabel_;
     QSlider* kpConfSlider_;
     QLabel* kpConfValueLabel_;
 
-    QDockWidget* depthDock_;
-    QTableWidget* depthTable_;
-    QDockWidget* pointCloudDock_;
+    // Depth page widgets
     QLabel* pointCloudLabel_;
 
+    // Draw mode
     enum class DrawMode { Idle, WaitingPt1, WaitingPt2 };
     DrawMode drawMode_ = DrawMode::Idle;
     cv::Point drawPt1_;
 
+    // State
     InferenceThread thread_;
     QImage lastFrame_;
     bool paused_ = false;
     QString currentModelPath_;
     QSet<int> enabledClasses_;
     QMap<int, int> classStats_;
+    QMap<int, int> uniqueCounts_;
     QStringList recentModels_;
     StereoSourceConfig stereoConfig_;
     SGBMParams sgbmParams_;
@@ -141,11 +170,14 @@ private:
     void saveSettings();
     void enumerateCameras();
     void refreshUIText();
+    void updateModelTypeUI();
     QPoint widgetToFrameCoords(const QPoint& widgetPos) const;
     void addRecentModel(const QString& path);
     void openVideoFile(const QString& path);
     void loadModelFile(const QString& path);
-    void updateModelTypeUI();
+    QAction* createAction(const QString& text, const QString& tip,
+                          const QKeySequence& shortcut = QKeySequence(),
+                          bool checkable = false, bool checked = false);
 };
 
 #endif // MAINWINDOW_H

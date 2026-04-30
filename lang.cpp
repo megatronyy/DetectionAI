@@ -290,6 +290,17 @@ static const struct { const char* key; const char* zh; const char* en; } strings
     {"export_pc_filter",      "点云 (*.ply *.xyz)",          "Point Cloud (*.ply *.xyz)"},
     {"export_pc_done",        "点云已导出: ",                 "Point cloud exported: "},
 
+    // Menu bar
+    {"menu_file",            "文件",                        "File"},
+    {"menu_model",           "模型",                        "Model"},
+    {"menu_playback",        "播放",                        "Playback"},
+    {"menu_tracking",        "追踪",                        "Tracking"},
+    {"menu_stereo",          "双目",                        "Stereo"},
+    {"menu_view",            "视图",                        "View"},
+    {"menu_help",            "帮助",                        "Help"},
+    {"menu_exit",            "退出",                        "Exit"},
+    {"menu_fullscreen",      "全屏",                        "Full Screen"},
+
     {nullptr, nullptr, nullptr}
 };
 
