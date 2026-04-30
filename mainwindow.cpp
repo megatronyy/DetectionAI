@@ -191,8 +191,6 @@ void MainWindow::setupUI()
     cameraCombo_->setCurrentIndex(0);
     connect(cameraCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onCameraChanged);
-    auto* camAction = fileMenu_->addSeparator();
-    // Camera submenu is just the combo in the toolbar, not in menu
     fileMenu_->addSeparator();
     fileMenu_->addAction(actExport_);
     fileMenu_->addSeparator();
@@ -1228,7 +1226,7 @@ void MainWindow::onExport()
     if (thread_.isTrackingEnabled()) {
         QMessageBox choiceDlg(QMessageBox::Question, Lang::s("export_choice"),
             Lang::s("export_choice"), QMessageBox::NoButton, this);
-        QPushButton* detBtn = choiceDlg.addButton(Lang::s("export_detect"), QMessageBox::AcceptRole);
+        choiceDlg.addButton(Lang::s("export_detect"), QMessageBox::AcceptRole);
         QPushButton* trackBtn = choiceDlg.addButton(Lang::s("export_tracking"), QMessageBox::AcceptRole);
         QPushButton* cancelBtn = choiceDlg.addButton(QMessageBox::Cancel);
         choiceDlg.exec();
