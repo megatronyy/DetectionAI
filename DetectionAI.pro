@@ -26,14 +26,24 @@ SOURCES += main.cpp \
            inferencethread.cpp \
            tracker.cpp \
            classfilterdialog.cpp \
-           lang.cpp
+           lang.cpp \
+           stereotypes.cpp \
+           stereosource.cpp \
+           stereomatcher.cpp \
+           calibrationdialog.cpp \
+           stereoettingsdialog.cpp
 
 HEADERS  += mainwindow.h \
             yolodetector.h \
             inferencethread.h \
             tracker.h \
             classfilterdialog.h \
-            lang.h
+            lang.h \
+            stereotypes.h \
+            stereosource.h \
+            stereomatcher.h \
+            calibrationdialog.h \
+            stereoettingsdialog.h
 
 FORMS    += mainwindow.ui
 RC_FILE  = app.rc

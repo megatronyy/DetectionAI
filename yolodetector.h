@@ -6,14 +6,24 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <utility>
 #include <QSet>
 #include <mutex>
+
+struct Keypoint {
+    cv::Point2f pt;
+    float confidence;
+};
 
 struct Detection {
     int classId;
     float confidence;
     cv::Rect bbox;
+    std::vector<Keypoint> keypoints;
+    float distance = -1.f;
 };
+
+enum class ModelType { Detection, Pose };
 
 class YOLODetector
 {
@@ -31,9 +41,16 @@ public:
     QSet<int> enabledClasses() const;
     bool isGpuEnabled() const;
     bool isLoaded() const;
+    ModelType modelType() const;
+    bool isPoseModel() const;
+    int numKeypoints() const;
 
     static const std::vector<std::string> CLASS_NAMES;
     static const int NUM_CLASSES = 80;
+
+    static const int POSE_CHANNELS = 56;
+    static const std::vector<std::string> KEYPOINT_NAMES;
+    static const std::vector<std::pair<int,int>> SKELETON_CONNECTIONS;
 
 private:
     Ort::Env env_;
@@ -49,6 +66,8 @@ private:
     float iouThreshold_ = 0.45f;
     bool gpuEnabled_ = false;
     bool loaded_ = false;
+    ModelType modelType_ = ModelType::Detection;
+    int numKeypoints_ = 0;
 
     float scaleX_ = 1.f, scaleY_ = 1.f;
     int padX_ = 0, padY_ = 0;

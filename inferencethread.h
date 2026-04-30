@@ -7,6 +7,9 @@
 #include <opencv2/opencv.hpp>
 #include "yolodetector.h"
 #include "tracker.h"
+#include "stereosource.h"
+#include "stereotypes.h"
+#include "stereomatcher.h"
 #include <atomic>
 #include <mutex>
 
@@ -16,6 +19,8 @@ struct TrackRecord {
     int64_t timestampMs;
     int x, y, width, height;
     float speed, angle;
+    float distance;
+    std::vector<float> kpData;
 };
 
 class InferenceThread : public QThread
@@ -48,6 +53,22 @@ public:
     void setSpeedEnabled(bool enabled);
     bool isSpeedEnabled() const;
 
+    void setSkeletonEnabled(bool enabled);
+    bool isSkeletonEnabled() const;
+    void setKeypointConfThreshold(float t);
+    float keypointConfThreshold() const;
+
+    bool openStereo(const StereoSourceConfig& config);
+    void setStereoMode(bool enabled);
+    bool isStereoMode() const;
+    void setDepthOverlay(bool enabled);
+    bool depthOverlayEnabled() const;
+    void setStereoCalibration(const StereoCalibration& cal);
+    void setSGBMParams(const SGBMParams& params);
+    SGBMParams sgbmParams() const;
+    StereoSourceConfig stereoSourceConfig() const;
+    StereoSource& stereoSource();
+
     void setCountingLine(const CountingLine& line);
     void clearCountingLine();
     bool hasCountingLine() const;
@@ -68,6 +89,8 @@ signals:
     void inputLost(const QString& msg);
     void trackingStatsUpdated(const QMap<int,int>& uniqueCounts, int totalUnique);
     void crossingStatsUpdated(const QMap<int, QMap<int, int>>& counts);
+    void poseDataUpdated(const std::vector<Detection>& dets);
+    void depthMapReady(const QImage& depthViz, float avgDepth);
 
 protected:
     void run() override;
@@ -77,6 +100,10 @@ private:
     cv::VideoWriter writer_;
     YOLODetector detector_;
     Tracker tracker_;
+    StereoSource stereoSource_;
+    StereoRectifier rectifier_;
+    StereoMatcher matcher_;
+    cv::Mat rightFrame_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> paused_{false};
@@ -85,7 +112,11 @@ private:
     std::atomic<bool> trackingEnabled_{false};
     std::atomic<bool> trajectoryEnabled_{false};
     std::atomic<bool> speedEnabled_{false};
+    std::atomic<bool> skeletonEnabled_{true};
+    std::atomic<bool> stereoMode_{false};
+    std::atomic<bool> depthOverlayEnabled_{false};
     std::atomic<bool> loopEnabled_{false};
+    float keypointConfThreshold_ = 0.5f;
 
     cv::Mat currentFrame_;
     QSize lastFrameSize_;
@@ -98,6 +129,9 @@ private:
     void drawDetections(cv::Mat& frame, const std::vector<Detection>& dets);
     void drawTracks(cv::Mat& frame, const std::vector<Track>& tracks);
     void drawTrajectory(cv::Mat& frame, const std::vector<Track>& tracks);
+    void drawSkeleton(cv::Mat& frame, const Detection& det);
+    void drawSkeletons(cv::Mat& frame, const std::vector<Detection>& dets);
+    void drawPoseTracks(cv::Mat& frame, const std::vector<Track>& tracks);
     void drawCountingLine(cv::Mat& frame);
     static void drawLabel(cv::Mat& frame, const cv::Rect& bbox, int classId, const std::string& label);
     static cv::Scalar classColor(int classId);

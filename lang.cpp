@@ -186,6 +186,110 @@ static const struct { const char* key; const char* zh; const char* en; } strings
     {"tip_draw_line",   "在画面上画一条计数线 (C)",       "Draw a counting line (C)"},
     {"tip_clear_line",  "清除计数线并重置计数",            "Clear line and reset counts"},
 
+    // Pose estimation
+    {"pose_title",           "姿态数据",                    "Pose Data"},
+    {"pose_keypoint",        "关键点",                      "Keypoint"},
+    {"pose_position",        "位置",                       "Position"},
+    {"pose_confidence",      "置信度",                      "Confidence"},
+    {"skeleton_on",          "隐藏骨骼",                    "Hide Skeleton"},
+    {"skeleton_off",         "显示骨骼",                    "Skeleton"},
+    {"tip_skeleton",         "显示骨骼连线和关键点 (K)",      "Show skeleton & keypoints (K)"},
+    {"pose_model_loaded",    "姿态模型已加载",               "Pose model loaded"},
+    {"detection_model_loaded","检测模型已加载",              "Detection model loaded"},
+    {"kp_conf_threshold",    "关键点阈值:",                  "KP Threshold:"},
+    {"about_text_pose",      "<h2>DetectionAI</h2>"
+                            "<p>YOLO11 人体姿态估计</p>"
+                            "<p>基于 Qt %1 / OpenCV %2 / ONNX Runtime</p>"
+                            "<p>COCO 17 关键点 | SORT 多目标追踪</p>",
+     "<h2>DetectionAI</h2>"
+     "<p>YOLO11 Human Pose Estimation</p>"
+     "<p>Powered by Qt %1 / OpenCV %2 / ONNX Runtime</p>"
+     "<p>COCO 17 Keypoints | SORT Multi-Object Tracking</p>"},
+
+    // Stereo / binocular vision
+    {"stereo_mode",       "双目模式",              "Stereo Mode"},
+    {"stereo_on",         "关闭双目",              "Stereo On"},
+    {"stereo_off",        "双目模式",              "Stereo"},
+    {"tip_stereo",        "双目立体视觉 (B)",       "Stereo vision (B)"},
+    {"stereo_settings",   "双目设置",              "Stereo Settings"},
+    {"stereo_hw",         "硬件类型",              "Hardware"},
+    {"hw_dual_usb",       "双USB摄像头",            "Dual USB Cameras"},
+    {"hw_dual_rtsp",      "双RTSP流",              "Dual RTSP Streams"},
+    {"hw_realsense",      "Intel RealSense",       "Intel RealSense"},
+    {"hw_zed",            "Stereolabs ZED",        "Stereolabs ZED"},
+    {"stereo_open_fail",  "无法打开双目设备",        "Cannot open stereo device"},
+    {"stereo_left",       "左目",                  "Left"},
+    {"stereo_right",      "右目",                  "Right"},
+    {"stereo_url_prompt", "输入左右 RTSP 地址:",    "Enter left/right RTSP URLs:"},
+    {"stereo_left_url",   "左 RTSP:",              "Left RTSP:"},
+    {"stereo_right_url",  "右 RTSP:",              "Right RTSP:"},
+    {"stereo_connected",  "双目设备已连接",          "Stereo device connected"},
+    {"stereo_disconnected","双目设备断开",          "Stereo device disconnected"},
+
+    // Calibration
+    {"calibration",            "标定",                     "Calibration"},
+    {"calib_start",            "开始标定",                  "Start Calibration"},
+    {"calib_setup",            "标定设置",                  "Calibration Setup"},
+    {"calib_board_cols",       "棋盘格内角列数:",           "Board inner cols:"},
+    {"calib_board_rows",       "棋盘格内角行数:",           "Board inner rows:"},
+    {"calib_square_size",      "方格边长(mm):",             "Square size (mm):"},
+    {"calib_capture",          "采集",                     "Capture"},
+    {"calib_auto_capture",     "自动采集",                  "Auto Capture"},
+    {"calib_captured",         "已采集: %1/%2",             "Captured: %1/%2"},
+    {"calib_min_frames",       "至少需要 %1 帧",            "Need at least %1 frames"},
+    {"calib_calibrating",      "标定计算中...",              "Calibrating..."},
+    {"calib_done",             "标定完成",                  "Calibration Done"},
+    {"calib_error",            "重投影误差: %1 像素",        "Reprojection error: %1 px"},
+    {"calib_quality_good",     "优秀",                     "Excellent"},
+    {"calib_quality_ok",       "可接受",                    "Acceptable"},
+    {"calib_quality_poor",     "较差（建议重新采集）",        "Poor (recapture recommended)"},
+    {"calib_save",             "保存标定文件",               "Save Calibration"},
+    {"calib_load_external",    "加载外部标定文件",            "Load External Calibration"},
+    {"calib_file_filter",      "标定文件 (*.yml *.yaml *.xml);;所有文件 (*)",
+     "Calibration Files (*.yml *.yaml *.xml);;All Files (*)"},
+    {"calib_saved",            "标定已保存: ",              "Calibration saved: "},
+    {"calib_loaded",           "标定已加载: ",              "Calibration loaded: "},
+    {"calib_load_fail",        "无法加载标定文件。",         "Cannot load calibration file."},
+    {"calib_no_corners",       "未检测到棋盘角点，请调整棋盘位置。",
+     "No chessboard corners detected. Adjust board position."},
+    {"calib_recapture",        "重新采集",                  "Recapture"},
+    {"tip_calibrate",          "双目标定 (Shift+B)",         "Stereo calibration (Shift+B)"},
+
+    // Depth / SGBM
+    {"depth_overlay",      "深度叠加",               "Depth Overlay"},
+    {"depth_overlay_on",   "关闭深度叠加",            "Hide Depth"},
+    {"depth_overlay_off",  "深度叠加",               "Depth Overlay"},
+    {"depth_dock",         "深度数据",               "Depth Data"},
+    {"depth_map",          "深度图",                 "Depth Map"},
+    {"distance",           "距离",                   "Distance"},
+    {"distance_m",         "%1m",                   "%1m"},
+    {"distance_unknown",   "未知",                   "Unknown"},
+    {"sgbm_params",        "SGBM 参数",              "SGBM Parameters"},
+    {"sgbm_block_size",    "匹配块大小",              "Block Size"},
+    {"sgbm_min_disp",      "最小视差",               "Min Disparity"},
+    {"sgbm_num_disp",      "视差数量",               "Num Disparities"},
+    {"sgbm_uniqueness",    "唯一性比率",              "Uniqueness Ratio"},
+    {"sgbm_speckle_win",   "斑点窗口",               "Speckle Window"},
+    {"sgbm_speckle_range", "斑点范围",               "Speckle Range"},
+    {"sgbm_baseline",      "基线距离(m):",            "Baseline (m):"},
+    {"sgbm_focal",         "焦距(px):",              "Focal Length (px):"},
+    {"tip_depth_overlay",  "深度颜色叠加 (D)",         "Depth color overlay (D)"},
+
+    // Depth dock columns
+    {"depth_track_id",     "追踪ID",                 "Track ID"},
+    {"depth_class",        "类别",                   "Class"},
+    {"depth_dist",         "距离(m)",                "Dist (m)"},
+    {"depth_conf",         "深度置信度",              "Depth Conf"},
+
+    // Point cloud
+    {"point_cloud",        "点云视图",               "Point Cloud"},
+    {"point_cloud_dock",   "鸟瞰点云",               "Bird's Eye View"},
+
+    // Export
+    {"export_pointcloud",     "导出点云",                    "Export Point Cloud"},
+    {"export_pc_filter",      "点云 (*.ply *.xyz)",          "Point Cloud (*.ply *.xyz)"},
+    {"export_pc_done",        "点云已导出: ",                 "Point cloud exported: "},
+
     {nullptr, nullptr, nullptr}
 };
 

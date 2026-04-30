@@ -22,6 +22,29 @@ void InferenceThread::setTrajectoryEnabled(bool e) { trajectoryEnabled_ = e; }
 bool InferenceThread::isTrajectoryEnabled() const { return trajectoryEnabled_; }
 void InferenceThread::setSpeedEnabled(bool e) { speedEnabled_ = e; }
 bool InferenceThread::isSpeedEnabled() const { return speedEnabled_; }
+void InferenceThread::setSkeletonEnabled(bool e) { skeletonEnabled_ = e; }
+bool InferenceThread::isSkeletonEnabled() const { return skeletonEnabled_; }
+void InferenceThread::setKeypointConfThreshold(float t) { keypointConfThreshold_ = t; }
+float InferenceThread::keypointConfThreshold() const { return keypointConfThreshold_; }
+
+bool InferenceThread::openStereo(const StereoSourceConfig& config)
+{
+    stereoSource_.close();
+    tracker_.reset();
+    clearTrackHistory();
+    return stereoSource_.open(config);
+}
+
+void InferenceThread::setStereoMode(bool e) { stereoMode_ = e; }
+bool InferenceThread::isStereoMode() const { return stereoMode_; }
+void InferenceThread::setDepthOverlay(bool e) { depthOverlayEnabled_ = e; }
+bool InferenceThread::depthOverlayEnabled() const { return depthOverlayEnabled_; }
+void InferenceThread::setStereoCalibration(const StereoCalibration& cal) { rectifier_.setCalibration(cal); }
+void InferenceThread::setSGBMParams(const SGBMParams& params) { matcher_.setParams(params); }
+SGBMParams InferenceThread::sgbmParams() const { return matcher_.params(); }
+StereoSourceConfig InferenceThread::stereoSourceConfig() const { return stereoSource_.config(); }
+StereoSource& InferenceThread::stereoSource() { return stereoSource_; }
+
 void InferenceThread::setCountingLine(const CountingLine& line) { tracker_.setCountingLine(line); }
 void InferenceThread::clearCountingLine() { tracker_.clearCountingLine(); }
 bool InferenceThread::hasCountingLine() const { return tracker_.hasCountingLine(); }
@@ -166,6 +189,79 @@ void InferenceThread::drawTrajectory(cv::Mat& frame, const std::vector<Track>& t
     }
 }
 
+void InferenceThread::drawSkeleton(cv::Mat& frame, const Detection& det)
+{
+    if (det.keypoints.empty()) return;
+
+    static const int KP_RADIUS = 4;
+    static const int LINE_THICKNESS = 2;
+    static const cv::Scalar KP_COLOR(0, 255, 255);
+
+    static const cv::Scalar HEAD_COLOR(255, 203, 192);
+    static const cv::Scalar ARM_COLOR(192, 128, 255);
+    static const cv::Scalar TORSO_COLOR(128, 255, 128);
+    static const cv::Scalar LEG_COLOR(96, 224, 255);
+
+    static const cv::Scalar connColors[] = {
+        HEAD_COLOR, HEAD_COLOR, HEAD_COLOR, HEAD_COLOR,
+        TORSO_COLOR,
+        ARM_COLOR, ARM_COLOR,
+        ARM_COLOR, ARM_COLOR,
+        TORSO_COLOR, TORSO_COLOR,
+        TORSO_COLOR,
+        LEG_COLOR, LEG_COLOR,
+        LEG_COLOR, LEG_COLOR
+    };
+
+    const auto& conns = YOLODetector::SKELETON_CONNECTIONS;
+    for (size_t c = 0; c < conns.size() && c < 16; c++) {
+        int a = conns[c].first, b = conns[c].second;
+        if (a >= (int)det.keypoints.size() || b >= (int)det.keypoints.size())
+            continue;
+        const auto& ka = det.keypoints[a];
+        const auto& kb = det.keypoints[b];
+        if (ka.confidence < keypointConfThreshold_ || kb.confidence < keypointConfThreshold_)
+            continue;
+        cv::line(frame, ka.pt, kb.pt, connColors[c], LINE_THICKNESS, cv::LINE_AA);
+    }
+
+    for (const auto& kp : det.keypoints) {
+        if (kp.confidence < keypointConfThreshold_) continue;
+        cv::circle(frame, kp.pt, KP_RADIUS, KP_COLOR, -1, cv::LINE_AA);
+    }
+}
+
+void InferenceThread::drawSkeletons(cv::Mat& frame, const std::vector<Detection>& dets)
+{
+    for (const auto& d : dets)
+        drawSkeleton(frame, d);
+}
+
+void InferenceThread::drawPoseTracks(cv::Mat& frame, const std::vector<Track>& tracks)
+{
+    for (const auto& t : tracks) {
+        std::string label = "#" + std::to_string(t.trackId) + " person " +
+                            cv::format("%.2f", t.det.confidence);
+        if (speedEnabled_ && t.speed > 0.5f)
+            label += " " + cv::format("%.1fpx/f", t.speed);
+        drawLabel(frame, t.det.bbox, t.det.classId, label);
+
+        if (skeletonEnabled_)
+            drawSkeleton(frame, t.det);
+
+        if (speedEnabled_ && t.speed > 0.5f) {
+            cv::Point center(t.det.bbox.x + t.det.bbox.width / 2,
+                             t.det.bbox.y + t.det.bbox.height / 2);
+            float rad = t.angle * (float)CV_PI / 180.f;
+            int arrowLen = std::min(30, (int)(t.speed * 3 + 10));
+            cv::Point endPt(center.x + (int)(arrowLen * std::cos(rad)),
+                            center.y + (int)(arrowLen * std::sin(rad)));
+            cv::Scalar color = classColor(t.det.classId);
+            cv::arrowedLine(frame, center, endPt, color, 2, cv::LINE_8, 0, 0.3);
+        }
+    }
+}
+
 void InferenceThread::drawCountingLine(cv::Mat& frame)
 {
     if (!tracker_.hasCountingLine()) return;
@@ -214,13 +310,136 @@ void InferenceThread::run()
             continue;
         }
 
-        if (!cap_.isOpened()) {
-            msleep(100);
-            continue;
-        }
+        if (stereoMode_) {
+            // Stereo capture path
+            cv::Mat leftRaw, rightRaw;
+            if (!stereoSource_.isOpened() || !stereoSource_.grab(leftRaw, rightRaw)) {
+                emptyCount++;
+                if (emptyCount > 30) {
+                    emit inputLost("双目设备断开");
+                    paused_ = true;
+                }
+                msleep(10);
+                continue;
+            }
+            emptyCount = 0;
 
-        cap_ >> currentFrame_;
-        if (currentFrame_.empty()) {
+            // Rectify if calibrated
+            if (rectifier_.isCalibrated())
+                rectifier_.rectify(leftRaw, rightRaw, currentFrame_, rightFrame_);
+            else {
+                currentFrame_ = leftRaw;
+                rightFrame_ = rightRaw;
+            }
+
+            lastFrameSize_ = QSize(currentFrame_.cols, currentFrame_.rows);
+
+            QElapsedTimer inferTimer;
+            inferTimer.start();
+            auto dets = detector_.detect(currentFrame_);
+            float inferMs = (float)inferTimer.elapsed();
+
+            // Compute depth if calibrated
+            if (rectifier_.isCalibrated() && !rightFrame_.empty()) {
+                cv::Mat disparity = matcher_.computeDisparity(currentFrame_, rightFrame_);
+                for (auto& det : dets) {
+                    auto dr = matcher_.computeDistance(disparity, det.bbox);
+                    det.distance = dr.distance;
+                }
+
+                if (depthOverlayEnabled_) {
+                    cv::Mat dispColor = matcher_.disparityColormap(disparity);
+                    cv::addWeighted(currentFrame_, 0.6, dispColor, 0.4, 0, currentFrame_);
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(detectionsMutex_);
+                lastDetections_ = dets;
+            }
+
+            if (trackingEnabled_) {
+                tracker_.setCurrentTime(QDateTime::currentMSecsSinceEpoch());
+                auto tracks = tracker_.update(dets);
+                if (detector_.isPoseModel())
+                    drawPoseTracks(currentFrame_, tracks);
+                else
+                    drawTracks(currentFrame_, tracks);
+                if (trajectoryEnabled_)
+                    drawTrajectory(currentFrame_, tracks);
+                if (tracker_.hasCountingLine())
+                    drawCountingLine(currentFrame_);
+
+                {
+                    int64_t nowMs = QDateTime::currentMSecsSinceEpoch();
+                    std::lock_guard<std::mutex> lock(historyMutex_);
+                    for (const auto& t : tracks) {
+                        TrackRecord rec;
+                        rec.trackId = t.trackId;
+                        rec.classId = t.det.classId;
+                        rec.timestampMs = nowMs;
+                        rec.x = t.det.bbox.x;
+                        rec.y = t.det.bbox.y;
+                        rec.width = t.det.bbox.width;
+                        rec.height = t.det.bbox.height;
+                        rec.speed = t.speed;
+                        rec.angle = t.angle;
+                        rec.distance = t.det.distance;
+                        rec.distance = t.det.distance;
+                        rec.kpData.reserve(t.det.keypoints.size() * 3);
+                        for (const auto& kp : t.det.keypoints) {
+                            rec.kpData.push_back(kp.pt.x);
+                            rec.kpData.push_back(kp.pt.y);
+                            rec.kpData.push_back(kp.confidence);
+                        }
+                        trackHistory_.push_back(rec);
+                    }
+                    if ((int)trackHistory_.size() > MAX_HISTORY)
+                        trackHistory_.erase(trackHistory_.begin(),
+                            trackHistory_.begin() + (trackHistory_.size() - MAX_HISTORY));
+                }
+            } else {
+                drawDetections(currentFrame_, dets);
+                if (detector_.isPoseModel() && skeletonEnabled_)
+                    drawSkeletons(currentFrame_, dets);
+            }
+
+            if (recording_ && writer_.isOpened())
+                writer_ << currentFrame_;
+
+            QImage img;
+            if (currentFrame_.channels() == 3)
+                img = QImage(currentFrame_.data, currentFrame_.cols, currentFrame_.rows,
+                             currentFrame_.step, QImage::Format_BGR888).copy();
+
+            frameCount++;
+            if (fpsTimer.elapsed() >= 1000) {
+                fps = frameCount * 1000.f / fpsTimer.elapsed();
+                frameCount = 0;
+                fpsTimer.restart();
+                if (trackingEnabled_) {
+                    auto uc = tracker_.uniqueCounts();
+                    emit trackingStatsUpdated(uc, tracker_.totalUnique());
+                    if (tracker_.hasCountingLine())
+                        emit crossingStatsUpdated(tracker_.crossingCountsByDir());
+                    if (detector_.isPoseModel())
+                        emit poseDataUpdated(dets);
+                }
+            }
+
+            QMap<int,int> classCounts;
+            for (const auto& d : dets) classCounts[d.classId]++;
+            emit frameReady(img, (int)dets.size(), fps, inferMs, classCounts);
+
+        } else {
+            // Mono capture path (original logic)
+            if (!cap_.isOpened()) {
+                msleep(100);
+                continue;
+            }
+
+            cap_ >> currentFrame_;
+            if (currentFrame_.empty()) {
             emptyCount++;
             if (isVideo_ && emptyCount > 5) {
                 if (loopEnabled_) {
@@ -256,7 +475,10 @@ void InferenceThread::run()
         if (trackingEnabled_) {
             tracker_.setCurrentTime(QDateTime::currentMSecsSinceEpoch());
             auto tracks = tracker_.update(dets);
-            drawTracks(currentFrame_, tracks);
+            if (detector_.isPoseModel())
+                drawPoseTracks(currentFrame_, tracks);
+            else
+                drawTracks(currentFrame_, tracks);
             if (trajectoryEnabled_)
                 drawTrajectory(currentFrame_, tracks);
             if (tracker_.hasCountingLine())
@@ -277,6 +499,12 @@ void InferenceThread::run()
                     rec.height = t.det.bbox.height;
                     rec.speed = t.speed;
                     rec.angle = t.angle;
+                    rec.kpData.reserve(t.det.keypoints.size() * 3);
+                    for (const auto& kp : t.det.keypoints) {
+                        rec.kpData.push_back(kp.pt.x);
+                        rec.kpData.push_back(kp.pt.y);
+                        rec.kpData.push_back(kp.confidence);
+                    }
                     trackHistory_.push_back(rec);
                 }
                 if ((int)trackHistory_.size() > MAX_HISTORY)
@@ -285,6 +513,8 @@ void InferenceThread::run()
             }
         } else {
             drawDetections(currentFrame_, dets);
+            if (detector_.isPoseModel() && skeletonEnabled_)
+                drawSkeletons(currentFrame_, dets);
         }
 
         if (recording_ && writer_.isOpened()) {
@@ -307,6 +537,8 @@ void InferenceThread::run()
                 emit trackingStatsUpdated(uc, tracker_.totalUnique());
                 if (tracker_.hasCountingLine())
                     emit crossingStatsUpdated(tracker_.crossingCountsByDir());
+                if (detector_.isPoseModel())
+                    emit poseDataUpdated(dets);
             }
         }
 
@@ -314,7 +546,8 @@ void InferenceThread::run()
         for (const auto& d : dets) classCounts[d.classId]++;
 
         emit frameReady(img, (int)dets.size(), fps, inferMs, classCounts);
-    }
+        } // end mono else
+    } // end while
 
     if (writer_.isOpened()) writer_.release();
 }

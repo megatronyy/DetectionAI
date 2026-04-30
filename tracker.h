@@ -17,14 +17,17 @@ struct CrossingEvent {
     int classId;
     int direction;       // +1 forward, -1 reverse
     int64_t timestampMs;
+    float distance;      // distance at crossing moment
 };
 
 struct Track {
     Detection det;
     int trackId;
     std::vector<cv::Point> trajectory;
+    std::vector<float> distanceHistory;
     float speed = 0.f;
     float angle = 0.f;
+    float avgDistance = -1.f;
 };
 
 class Tracker
@@ -58,6 +61,8 @@ private:
         float confidence;
         std::vector<cv::Point> trajectory;
         int lastSide = 0;
+        std::vector<Keypoint> lastKeypoints;
+        std::vector<float> distanceHistory;
     };
 
     std::vector<InternalTrack> tracks_;

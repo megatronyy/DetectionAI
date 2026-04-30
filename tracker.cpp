@@ -270,6 +270,12 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
             tracks_[i].lastBbox = detections[j].bbox;
             tracks_[i].classId = detections[j].classId;
             tracks_[i].confidence = detections[j].confidence;
+            tracks_[i].lastKeypoints = detections[j].keypoints;
+            if (detections[j].distance > 0) {
+                tracks_[i].distanceHistory.push_back(detections[j].distance);
+                if ((int)tracks_[i].distanceHistory.size() > MAX_TRAJECTORY_LEN)
+                    tracks_[i].distanceHistory.erase(tracks_[i].distanceHistory.begin());
+            }
             tracks_[i].hits++;
             tracks_[i].missedFrames = 0;
             cv::Point center(detections[j].bbox.x + detections[j].bbox.width / 2,
@@ -286,6 +292,8 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
                     evt.classId = tracks_[i].classId;
                     evt.direction = currentSide;
                     evt.timestampMs = currentTimeMs_;
+                    evt.distance = tracks_[i].distanceHistory.empty() ? -1.f :
+                        tracks_[i].distanceHistory.back();
                     crossings_.push_back(evt);
                     crossingCountsByDir_[tracks_[i].classId][currentSide]++;
                 }
@@ -313,6 +321,9 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
             t.lastBbox = detections[j].bbox;
             t.classId = detections[j].classId;
             t.confidence = detections[j].confidence;
+            t.lastKeypoints = detections[j].keypoints;
+            if (detections[j].distance > 0)
+                t.distanceHistory.push_back(detections[j].distance);
             cv::Point center(detections[j].bbox.x + detections[j].bbox.width / 2,
                              detections[j].bbox.y + detections[j].bbox.height / 2);
             t.trajectory.push_back(center);
@@ -337,7 +348,22 @@ std::vector<Track> Tracker::update(const std::vector<Detection>& detections)
             float speed = std::sqrt(vx * vx + vy * vy);
             float angle = std::atan2(vy, vx) * 180.f / (float)CV_PI;
             if (angle < 0) angle += 360.f;
-            result.push_back({{t.classId, t.confidence, t.lastBbox}, t.trackId, t.trajectory, speed, angle});
+            Track outTrack;
+            outTrack.det = {t.classId, t.confidence, t.lastBbox, t.lastKeypoints};
+            outTrack.det.distance = t.lastKeypoints.empty() ? -1.f :
+                (t.distanceHistory.empty() ? -1.f : t.distanceHistory.back());
+            outTrack.trackId = t.trackId;
+            outTrack.trajectory = t.trajectory;
+            outTrack.distanceHistory = t.distanceHistory;
+            outTrack.speed = speed;
+            outTrack.angle = angle;
+            // Compute average distance
+            {
+                float sum = 0; int cnt = 0;
+                for (float d : t.distanceHistory) { if (d > 0) { sum += d; cnt++; } }
+                outTrack.avgDistance = cnt > 0 ? sum / cnt : -1.f;
+            }
+            result.push_back(outTrack);
         }
     }
     return result;

@@ -15,6 +15,8 @@
 #include <QInputDialog>
 #include <QMouseEvent>
 #include "inferencethread.h"
+#include "stereosource.h"
+#include "stereomatcher.h"
 
 class MainWindow : public QMainWindow
 {
@@ -48,6 +50,13 @@ private slots:
     void onToggleLoop(bool checked);
     void onToggleTrajectory(bool checked);
     void onToggleSpeed(bool checked);
+    void onToggleSkeleton(bool checked);
+    void onPoseDataUpdated(const std::vector<Detection>& dets);
+    void onToggleStereo(bool checked);
+    void onStereoSettings();
+    void onCalibrate();
+    void onToggleDepthOverlay(bool checked);
+    void onDepthMapReady(const QImage& depthViz, float avgDepth);
     void onTrackingStatsUpdated(const QMap<int,int>& uniqueCounts, int totalUnique);
     void onDrawCountingLine();
     void onClearCountingLine();
@@ -73,6 +82,11 @@ private:
     QPushButton* trackingBtn_;
     QPushButton* trajectoryBtn_;
     QPushButton* speedBtn_;
+    QPushButton* skeletonBtn_;
+    QPushButton* stereoBtn_;
+    QPushButton* calibrateBtn_;
+    QPushButton* depthOverlayBtn_;
+    QPushButton* stereoSettingsBtn_;
     QPushButton* countLineBtn_;
     QPushButton* clearLineBtn_;
     QPushButton* langBtn_;
@@ -96,6 +110,17 @@ private:
     QTableWidget* countingTable_;
     QPushButton* clearCrossingBtn_;
 
+    QDockWidget* poseDock_;
+    QTableWidget* poseTable_;
+    QLabel* posePersonLabel_;
+    QSlider* kpConfSlider_;
+    QLabel* kpConfValueLabel_;
+
+    QDockWidget* depthDock_;
+    QTableWidget* depthTable_;
+    QDockWidget* pointCloudDock_;
+    QLabel* pointCloudLabel_;
+
     enum class DrawMode { Idle, WaitingPt1, WaitingPt2 };
     DrawMode drawMode_ = DrawMode::Idle;
     cv::Point drawPt1_;
@@ -107,6 +132,9 @@ private:
     QSet<int> enabledClasses_;
     QMap<int, int> classStats_;
     QStringList recentModels_;
+    StereoSourceConfig stereoConfig_;
+    SGBMParams sgbmParams_;
+    QString lastCalibPath_;
 
     void setupUI();
     void loadSettings();
@@ -117,6 +145,7 @@ private:
     void addRecentModel(const QString& path);
     void openVideoFile(const QString& path);
     void loadModelFile(const QString& path);
+    void updateModelTypeUI();
 };
 
 #endif // MAINWINDOW_H

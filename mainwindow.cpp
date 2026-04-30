@@ -1,5 +1,7 @@
 #include "mainwindow.h"
 #include "classfilterdialog.h"
+#include "calibrationdialog.h"
+#include "stereoettingsdialog.h"
 #include "lang.h"
 #include <QIcon>
 #include <QToolBar>
@@ -17,6 +19,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMenuBar>
+#include <algorithm>
 #include <QMenu>
 #include <QMimeData>
 #include <QUrl>
@@ -48,8 +51,7 @@ MainWindow::MainWindow(QWidget *parent)
     currentModelPath_ = modelPath;
     addRecentModel(modelPath);
 
-    deviceLabel_->setText(thread_.detector().isGpuEnabled()
-        ? Lang::s("device_gpu") : Lang::s("device_cpu"));
+    updateModelTypeUI();
 
     // Open default camera
     int cam = cameraCombo_->currentData().toInt();
@@ -67,6 +69,10 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onTrackingStatsUpdated);
     connect(&thread_, &InferenceThread::crossingStatsUpdated,
             this, &MainWindow::onCrossingStatsUpdated);
+    connect(&thread_, &InferenceThread::poseDataUpdated,
+            this, &MainWindow::onPoseDataUpdated);
+    connect(&thread_, &InferenceThread::depthMapReady,
+            this, &MainWindow::onDepthMapReady);
 
     thread_.start();
 }
@@ -115,6 +121,11 @@ void MainWindow::setupUI()
     trackingBtn_    = new QPushButton(Lang::s("tracking_off"));
     trajectoryBtn_  = new QPushButton(Lang::s("trajectory_off"));
     speedBtn_       = new QPushButton(Lang::s("speed_off"));
+    skeletonBtn_    = new QPushButton(Lang::s("skeleton_off"));
+    stereoBtn_      = new QPushButton(Lang::s("stereo_off"));
+    calibrateBtn_   = new QPushButton(Lang::s("calibration"));
+    depthOverlayBtn_ = new QPushButton(Lang::s("depth_overlay_off"));
+    stereoSettingsBtn_ = new QPushButton(Lang::s("stereo_settings"));
     countLineBtn_   = new QPushButton(Lang::s("draw_line"));
     clearLineBtn_   = new QPushButton(Lang::s("clear_line"));
     langBtn_        = new QPushButton(Lang::s("lang_toggle"));
@@ -123,6 +134,10 @@ void MainWindow::setupUI()
     trackingBtn_->setCheckable(true);
     trajectoryBtn_->setCheckable(true);
     speedBtn_->setCheckable(true);
+    skeletonBtn_->setCheckable(true);
+    skeletonBtn_->setChecked(true);
+    stereoBtn_->setCheckable(true);
+    depthOverlayBtn_->setCheckable(true);
 
     pauseBtn_->setToolTip(Lang::s("tip_pause"));
     screenshotBtn_->setToolTip(Lang::s("tip_screenshot"));
@@ -136,6 +151,10 @@ void MainWindow::setupUI()
     trackingBtn_->setToolTip(Lang::s("tip_tracking"));
     trajectoryBtn_->setToolTip(Lang::s("tip_trajectory"));
     speedBtn_->setToolTip(Lang::s("tip_speed"));
+    skeletonBtn_->setToolTip(Lang::s("tip_skeleton"));
+    stereoBtn_->setToolTip(Lang::s("tip_stereo"));
+    calibrateBtn_->setToolTip(Lang::s("tip_calibrate"));
+    depthOverlayBtn_->setToolTip(Lang::s("tip_depth_overlay"));
     countLineBtn_->setToolTip(Lang::s("tip_draw_line"));
     clearLineBtn_->setToolTip(Lang::s("tip_clear_line"));
     langBtn_->setToolTip(Lang::s("tip_lang"));
@@ -161,6 +180,11 @@ void MainWindow::setupUI()
     toolbar->addWidget(trackingBtn_);
     toolbar->addWidget(trajectoryBtn_);
     toolbar->addWidget(speedBtn_);
+    toolbar->addWidget(skeletonBtn_);
+    toolbar->addWidget(stereoBtn_);
+    toolbar->addWidget(calibrateBtn_);
+    toolbar->addWidget(depthOverlayBtn_);
+    toolbar->addWidget(stereoSettingsBtn_);
     toolbar->addWidget(countLineBtn_);
     toolbar->addWidget(clearLineBtn_);
     toolbar->addSeparator();
@@ -182,6 +206,11 @@ void MainWindow::setupUI()
     connect(trackingBtn_, &QPushButton::toggled, this, &MainWindow::onToggleTracking);
     connect(trajectoryBtn_, &QPushButton::toggled, this, &MainWindow::onToggleTrajectory);
     connect(speedBtn_, &QPushButton::toggled, this, &MainWindow::onToggleSpeed);
+    connect(skeletonBtn_, &QPushButton::toggled, this, &MainWindow::onToggleSkeleton);
+    connect(stereoBtn_, &QPushButton::toggled, this, &MainWindow::onToggleStereo);
+    connect(calibrateBtn_, &QPushButton::clicked, this, &MainWindow::onCalibrate);
+    connect(depthOverlayBtn_, &QPushButton::toggled, this, &MainWindow::onToggleDepthOverlay);
+    connect(stereoSettingsBtn_, &QPushButton::clicked, this, &MainWindow::onStereoSettings);
     connect(countLineBtn_, &QPushButton::clicked, this, &MainWindow::onDrawCountingLine);
     connect(clearLineBtn_, &QPushButton::clicked, this, &MainWindow::onClearCountingLine);
     connect(langBtn_, &QPushButton::clicked, this, &MainWindow::onToggleLanguage);
@@ -318,6 +347,89 @@ void MainWindow::setupUI()
         thread_.resetCrossingCounts();
         countingTable_->setRowCount(0);
     });
+
+    // --- Pose data dock ---
+    poseDock_ = new QDockWidget(Lang::s("pose_title"), this);
+    auto* poseWidget = new QWidget;
+    auto* poseLayout = new QVBoxLayout(poseWidget);
+    poseLayout->setContentsMargins(0, 0, 0, 0);
+
+    posePersonLabel_ = new QLabel("");
+    poseLayout->addWidget(posePersonLabel_);
+
+    poseTable_ = new QTableWidget(0, 3, poseWidget);
+    poseTable_->setHorizontalHeaderLabels(
+        {Lang::s("pose_keypoint"), Lang::s("pose_position"), Lang::s("pose_confidence")});
+    poseTable_->horizontalHeader()->setStretchLastSection(true);
+    poseTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    poseTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    poseLayout->addWidget(poseTable_);
+
+    auto* kpConfLayout = new QHBoxLayout;
+    kpConfLayout->addWidget(new QLabel(Lang::s("kp_conf_threshold")));
+    kpConfSlider_ = new QSlider(Qt::Horizontal);
+    kpConfSlider_->setRange(10, 95);
+    kpConfSlider_->setValue(50);
+    kpConfSlider_->setMinimumWidth(100);
+    kpConfValueLabel_ = new QLabel("0.50");
+    kpConfValueLabel_->setMinimumWidth(36);
+    kpConfLayout->addWidget(kpConfSlider_);
+    kpConfLayout->addWidget(kpConfValueLabel_);
+    poseLayout->addLayout(kpConfLayout);
+
+    connect(kpConfSlider_, &QSlider::valueChanged, this, [this](int value) {
+        float threshold = value / 100.f;
+        thread_.setKeypointConfThreshold(threshold);
+        kpConfValueLabel_->setText(QString::number(threshold, 'f', 2));
+    });
+
+    poseDock_->setWidget(poseWidget);
+    addDockWidget(Qt::RightDockWidgetArea, poseDock_);
+    tabifyDockWidget(statsDock_, poseDock_);
+    poseDock_->hide();
+    skeletonBtn_->setVisible(false);
+
+    // --- Depth data dock ---
+    depthDock_ = new QDockWidget(Lang::s("depth_dock"), this);
+    auto* depthWidget = new QWidget;
+    auto* depthLayout = new QVBoxLayout(depthWidget);
+    depthLayout->setContentsMargins(0, 0, 0, 0);
+
+    depthTable_ = new QTableWidget(0, 4, depthWidget);
+    depthTable_->setHorizontalHeaderLabels(
+        {Lang::s("depth_track_id"), Lang::s("depth_class"),
+         Lang::s("depth_dist"), Lang::s("depth_conf")});
+    depthTable_->horizontalHeader()->setStretchLastSection(true);
+    depthTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    depthTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    depthLayout->addWidget(depthTable_);
+
+    depthDock_->setWidget(depthWidget);
+    addDockWidget(Qt::RightDockWidgetArea, depthDock_);
+    tabifyDockWidget(statsDock_, depthDock_);
+    depthDock_->hide();
+
+    // --- Point cloud dock ---
+    pointCloudDock_ = new QDockWidget(Lang::s("point_cloud_dock"), this);
+    auto* pcWidget = new QWidget;
+    auto* pcLayout = new QVBoxLayout(pcWidget);
+    pcLayout->setContentsMargins(0, 0, 0, 0);
+
+    pointCloudLabel_ = new QLabel;
+    pointCloudLabel_->setAlignment(Qt::AlignCenter);
+    pointCloudLabel_->setStyleSheet("QLabel { background-color: #1a1a1a; }");
+    pointCloudLabel_->setMinimumSize(300, 300);
+    pcLayout->addWidget(pointCloudLabel_);
+
+    pointCloudDock_->setWidget(pcWidget);
+    addDockWidget(Qt::RightDockWidgetArea, pointCloudDock_);
+    tabifyDockWidget(statsDock_, pointCloudDock_);
+    pointCloudDock_->hide();
+
+    // Stereo buttons hidden by default
+    calibrateBtn_->setVisible(false);
+    depthOverlayBtn_->setVisible(false);
+    stereoSettingsBtn_->setVisible(false);
 }
 
 void MainWindow::loadSettings()
@@ -348,6 +460,18 @@ void MainWindow::loadSettings()
     bool speed = settings.value("speed", false).toBool();
     speedBtn_->setChecked(speed);
     thread_.setSpeedEnabled(speed);
+    bool skeleton = settings.value("skeleton", true).toBool();
+    skeletonBtn_->setChecked(skeleton);
+    thread_.setSkeletonEnabled(skeleton);
+    bool stereo = settings.value("stereoMode", false).toBool();
+    stereoBtn_->setChecked(stereo);
+    thread_.setStereoMode(stereo);
+    bool depthOverlay = settings.value("depthOverlay", false).toBool();
+    depthOverlayBtn_->setChecked(depthOverlay);
+    thread_.setDepthOverlay(depthOverlay);
+    float kpConf = settings.value("keypointConfThreshold", 0.5).toFloat();
+    kpConfSlider_->setValue((int)(kpConf * 100));
+    thread_.setKeypointConfThreshold(kpConf);
     loopBtn_->setChecked(loop);
     thread_.setLoopEnabled(loop);
 
@@ -362,6 +486,33 @@ void MainWindow::loadSettings()
 
     recentModels_ = settings.value("recentModels").toStringList();
 
+    // Stereo config
+    stereoConfig_.hardware = static_cast<StereoHardware>(
+        settings.value("stereoHardware", 0).toInt());
+    stereoConfig_.leftCameraIndex = settings.value("stereoLeftCam", 0).toInt();
+    stereoConfig_.rightCameraIndex = settings.value("stereoRightCam", 1).toInt();
+    stereoConfig_.leftRTSPUrl = settings.value("stereoLeftRTSP", "").toString().toStdString();
+    stereoConfig_.rightRTSPUrl = settings.value("stereoRightRTSP", "").toString().toStdString();
+    stereoConfig_.targetWidth = settings.value("stereoWidth", 640).toInt();
+    stereoConfig_.targetHeight = settings.value("stereoHeight", 480).toInt();
+
+    sgbmParams_.blockSize = settings.value("sgbmBlockSize", 5).toInt();
+    sgbmParams_.minDisparity = settings.value("sgbmMinDisp", 0).toInt();
+    sgbmParams_.numDisparities = settings.value("sgbmNumDisp", 64).toInt();
+    sgbmParams_.uniquenessRatio = settings.value("sgbmUniqueness", 10).toInt();
+    sgbmParams_.speckleWindowSize = settings.value("sgbmSpeckleWin", 100).toInt();
+    sgbmParams_.speckleRange = settings.value("sgbmSpeckleRange", 32).toInt();
+    sgbmParams_.baselineMeters = settings.value("sgbmBaseline", 0.06).toFloat();
+    sgbmParams_.focalLengthPixels = settings.value("sgbmFocal", 700.0).toFloat();
+    thread_.setSGBMParams(sgbmParams_);
+
+    lastCalibPath_ = settings.value("lastCalibPath", "").toString();
+    if (!lastCalibPath_.isEmpty()) {
+        StereoRectifier rectifier;
+        if (rectifier.loadCalibration(lastCalibPath_.toStdString()))
+            thread_.setStereoCalibration(rectifier.calibration());
+    }
+
     if (settings.value("statsVisible", true).toBool())
         statsDock_->show();
     else
@@ -371,6 +522,21 @@ void MainWindow::loadSettings()
         countingDock_->show();
     else
         countingDock_->hide();
+
+    if (settings.value("poseDockVisible", false).toBool())
+        poseDock_->show();
+    else
+        poseDock_->hide();
+
+    if (settings.value("depthDockVisible", false).toBool())
+        depthDock_->show();
+    else
+        depthDock_->hide();
+
+    if (settings.value("pointCloudDockVisible", false).toBool())
+        pointCloudDock_->show();
+    else
+        pointCloudDock_->hide();
 }
 
 void MainWindow::saveSettings()
@@ -385,11 +551,36 @@ void MainWindow::saveSettings()
     settings.setValue("tracking", thread_.isTrackingEnabled());
     settings.setValue("trajectory", thread_.isTrajectoryEnabled());
     settings.setValue("speed", thread_.isSpeedEnabled());
+    settings.setValue("skeleton", thread_.isSkeletonEnabled());
+    settings.setValue("keypointConfThreshold", thread_.keypointConfThreshold());
     settings.setValue("loop", thread_.isLoopEnabled());
     settings.setValue("language", static_cast<int>(Lang::language()));
+    settings.setValue("stereoMode", thread_.isStereoMode());
+    settings.setValue("depthOverlay", thread_.depthOverlayEnabled());
     settings.setValue("statsVisible", statsDock_->isVisible());
     settings.setValue("countingDockVisible", countingDock_->isVisible());
+    settings.setValue("poseDockVisible", poseDock_->isVisible());
+    settings.setValue("depthDockVisible", depthDock_->isVisible());
+    settings.setValue("pointCloudDockVisible", pointCloudDock_->isVisible());
     settings.setValue("recentModels", recentModels_);
+
+    settings.setValue("stereoHardware", static_cast<int>(stereoConfig_.hardware));
+    settings.setValue("stereoLeftCam", stereoConfig_.leftCameraIndex);
+    settings.setValue("stereoRightCam", stereoConfig_.rightCameraIndex);
+    settings.setValue("stereoLeftRTSP", QString::fromStdString(stereoConfig_.leftRTSPUrl));
+    settings.setValue("stereoRightRTSP", QString::fromStdString(stereoConfig_.rightRTSPUrl));
+    settings.setValue("stereoWidth", stereoConfig_.targetWidth);
+    settings.setValue("stereoHeight", stereoConfig_.targetHeight);
+
+    settings.setValue("sgbmBlockSize", sgbmParams_.blockSize);
+    settings.setValue("sgbmMinDisp", sgbmParams_.minDisparity);
+    settings.setValue("sgbmNumDisp", sgbmParams_.numDisparities);
+    settings.setValue("sgbmUniqueness", sgbmParams_.uniquenessRatio);
+    settings.setValue("sgbmSpeckleWin", sgbmParams_.speckleWindowSize);
+    settings.setValue("sgbmSpeckleRange", sgbmParams_.speckleRange);
+    settings.setValue("sgbmBaseline", sgbmParams_.baselineMeters);
+    settings.setValue("sgbmFocal", sgbmParams_.focalLengthPixels);
+    settings.setValue("lastCalibPath", lastCalibPath_);
 
     QList<QVariant> classList;
     for (int id : std::as_const(enabledClasses_)) classList.append(id);
@@ -436,6 +627,20 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         break;
     case Qt::Key_C:
         onDrawCountingLine();
+        break;
+    case Qt::Key_K:
+        if (thread_.detector().isPoseModel())
+            skeletonBtn_->toggle();
+        break;
+    case Qt::Key_B:
+        if (event->modifiers() & Qt::ShiftModifier)
+            onCalibrate();
+        else
+            stereoBtn_->toggle();
+        break;
+    case Qt::Key_D:
+        if (thread_.isStereoMode())
+            depthOverlayBtn_->toggle();
         break;
     case Qt::Key_E:
         onExport();
@@ -745,8 +950,7 @@ void MainWindow::loadModelFile(const QString& path)
 
     currentModelPath_ = path;
     addRecentModel(path);
-    deviceLabel_->setText(thread_.detector().isGpuEnabled()
-        ? Lang::s("device_gpu") : Lang::s("device_cpu"));
+    updateModelTypeUI();
     paused_ = false;
     pauseBtn_->setText(Lang::s("pause"));
     thread_.start();
@@ -803,6 +1007,161 @@ void MainWindow::onToggleSpeed(bool checked)
     speedBtn_->setText(checked ? Lang::s("speed_on") : Lang::s("speed_off"));
     statusBar()->showMessage(
         checked ? Lang::s("speed_on") : Lang::s("speed_off"), 2000);
+}
+
+void MainWindow::onToggleSkeleton(bool checked)
+{
+    thread_.setSkeletonEnabled(checked);
+    skeletonBtn_->setText(checked ? Lang::s("skeleton_on") : Lang::s("skeleton_off"));
+}
+
+void MainWindow::onToggleStereo(bool checked)
+{
+    if (checked) {
+        // Open stereo source
+        if (!thread_.openStereo(stereoConfig_)) {
+            QMessageBox::warning(this, Lang::s("error"), Lang::s("stereo_open_fail"));
+            stereoBtn_->setChecked(false);
+            return;
+        }
+        thread_.setStereoMode(true);
+        statusBar()->showMessage(Lang::s("stereo_connected"), 3000);
+    } else {
+        thread_.setStereoMode(false);
+        thread_.openCamera(cameraCombo_->currentData().toInt());
+        depthDock_->hide();
+        pointCloudDock_->hide();
+        statusBar()->showMessage(Lang::s("stereo_disconnected"), 3000);
+    }
+
+    stereoBtn_->setText(checked ? Lang::s("stereo_on") : Lang::s("stereo_off"));
+    calibrateBtn_->setVisible(checked);
+    depthOverlayBtn_->setVisible(checked);
+    stereoSettingsBtn_->setVisible(checked);
+    updateModelTypeUI();
+}
+
+void MainWindow::onStereoSettings()
+{
+    StereoSettingsDialog dlg(stereoConfig_, sgbmParams_, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        stereoConfig_ = dlg.sourceConfig();
+        sgbmParams_ = dlg.sgbmParams();
+        thread_.setSGBMParams(sgbmParams_);
+
+        if (thread_.isStereoMode()) {
+            thread_.setStereoMode(false);
+            if (thread_.openStereo(stereoConfig_)) {
+                thread_.setStereoMode(true);
+            } else {
+                QMessageBox::warning(this, Lang::s("error"), Lang::s("stereo_open_fail"));
+                stereoBtn_->setChecked(false);
+            }
+        }
+    }
+}
+
+void MainWindow::onCalibrate()
+{
+    if (!thread_.isStereoMode()) return;
+
+    CalibrationDialog dlg(&thread_.stereoSource(), this);
+    connect(&dlg, &CalibrationDialog::capturedCountChanged, this, [this]() {
+        // Could update UI during calibration
+    });
+    if (dlg.exec() == QDialog::Accepted) {
+        StereoCalibration cal = dlg.result();
+        if (cal.valid) {
+            thread_.setStereoCalibration(cal);
+
+            QString defaultName = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + "_stereo.yml";
+            QString path = QFileDialog::getSaveFileName(this, Lang::s("calib_save"),
+                defaultName, Lang::s("calib_file_filter"), nullptr, QFileDialog::DontUseNativeDialog);
+            if (!path.isEmpty()) {
+                StereoRectifier rectifier;
+                rectifier.setCalibration(cal);
+                if (rectifier.saveCalibration(path.toStdString())) {
+                    lastCalibPath_ = path;
+                    statusBar()->showMessage(Lang::s("calib_saved") + path, 3000);
+                }
+            }
+        }
+    }
+}
+
+void MainWindow::onToggleDepthOverlay(bool checked)
+{
+    thread_.setDepthOverlay(checked);
+    depthOverlayBtn_->setText(checked ? Lang::s("depth_overlay_on") : Lang::s("depth_overlay_off"));
+    if (checked) {
+        depthDock_->show();
+    }
+}
+
+void MainWindow::onDepthMapReady(const QImage& depthViz, float avgDepth)
+{
+    Q_UNUSED(avgDepth);
+
+    // Update point cloud dock with depth visualization
+    if (pointCloudDock_->isVisible() && !depthViz.isNull()) {
+        pointCloudLabel_->setPixmap(QPixmap::fromImage(depthViz).scaled(
+            pointCloudLabel_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+
+    // Update depth table from latest detections with distance
+    if (depthDock_->isVisible()) {
+        auto dets = thread_.lastDetections();
+
+        // Filter detections with valid distance
+        int row = 0;
+        for (const auto& d : dets) {
+            if (d.distance > 0) {
+                depthTable_->setRowCount(row + 1);
+                depthTable_->setItem(row, 0,
+                    new QTableWidgetItem(QString::number(row)));
+                depthTable_->setItem(row, 1,
+                    new QTableWidgetItem(QString::fromStdString(YOLODetector::CLASS_NAMES[d.classId])));
+                depthTable_->setItem(row, 2,
+                    new QTableWidgetItem(QString::number(d.distance, 'f', 2)));
+                depthTable_->setItem(row, 3,
+                    new QTableWidgetItem(QString::number(d.confidence, 'f', 2)));
+                row++;
+            }
+        }
+        if (row == 0) depthTable_->setRowCount(0);
+    }
+}
+
+void MainWindow::onPoseDataUpdated(const std::vector<Detection>& dets)
+{
+    if (!poseDock_->isVisible()) return;
+
+    if (dets.empty()) {
+        poseTable_->setRowCount(0);
+        posePersonLabel_->setText("");
+        return;
+    }
+
+    const auto& det = *std::max_element(dets.begin(), dets.end(),
+        [](const Detection& a, const Detection& b) { return a.confidence < b.confidence; });
+
+    posePersonLabel_->setText(
+        QString("Person conf: %1  |  Keypoints: %2")
+            .arg(det.confidence, 0, 'f', 2)
+            .arg(det.keypoints.size()));
+
+    poseTable_->setRowCount((int)det.keypoints.size());
+    for (int i = 0; i < (int)det.keypoints.size(); i++) {
+        const auto& kp = det.keypoints[i];
+        QString name = (i < (int)YOLODetector::KEYPOINT_NAMES.size())
+            ? QString::fromStdString(YOLODetector::KEYPOINT_NAMES[i])
+            : QString("kp_%1").arg(i);
+        poseTable_->setItem(i, 0, new QTableWidgetItem(name));
+        poseTable_->setItem(i, 1,
+            new QTableWidgetItem(QString("(%1, %2)").arg((int)kp.pt.x).arg((int)kp.pt.y)));
+        poseTable_->setItem(i, 2,
+            new QTableWidgetItem(QString::number(kp.confidence, 'f', 2)));
+    }
 }
 
 void MainWindow::onTrackingStatsUpdated(const QMap<int,int>& uniqueCounts, int totalUnique)
@@ -998,6 +1357,21 @@ void MainWindow::onExport()
                 bbox.append(d.bbox.width);
                 bbox.append(d.bbox.height);
                 obj["bbox"] = bbox;
+                if (!d.keypoints.empty()) {
+                    QJsonArray kpArr;
+                    for (int k = 0; k < (int)d.keypoints.size(); k++) {
+                        QJsonObject kpObj;
+                        QString kpName = (k < (int)YOLODetector::KEYPOINT_NAMES.size())
+                            ? QString::fromStdString(YOLODetector::KEYPOINT_NAMES[k])
+                            : QString("kp_%1").arg(k);
+                        kpObj["name"] = kpName;
+                        kpObj["x"] = qRound(d.keypoints[k].pt.x * 10) / 10.0;
+                        kpObj["y"] = qRound(d.keypoints[k].pt.y * 10) / 10.0;
+                        kpObj["confidence"] = qRound(d.keypoints[k].confidence * 1000) / 1000.0;
+                        kpArr.append(kpObj);
+                    }
+                    obj["keypoints"] = kpArr;
+                }
                 arr.append(obj);
             }
             root["detections"] = arr;
@@ -1026,8 +1400,43 @@ void MainWindow::onAbout()
 {
     QString cvVer = QString("%1.%2.%3")
         .arg(CV_VERSION_MAJOR).arg(CV_VERSION_MINOR).arg(CV_VERSION_REVISION);
-    QMessageBox::about(this, Lang::s("about"),
-        Lang::s("about_text").arg(qVersion()).arg(cvVer));
+    if (thread_.detector().isPoseModel()) {
+        QMessageBox::about(this, Lang::s("about"),
+            Lang::s("about_text_pose").arg(qVersion()).arg(cvVer));
+    } else {
+        QMessageBox::about(this, Lang::s("about"),
+            Lang::s("about_text").arg(qVersion()).arg(cvVer));
+    }
+}
+
+void MainWindow::updateModelTypeUI()
+{
+    bool isPose = thread_.detector().isPoseModel();
+    bool isStereo = thread_.isStereoMode();
+
+    poseDock_->setVisible(isPose && !isStereo);
+    skeletonBtn_->setVisible(isPose);
+    classFilterBtn_->setVisible(!isPose);
+
+    calibrateBtn_->setVisible(isStereo);
+    depthOverlayBtn_->setVisible(isStereo);
+    stereoSettingsBtn_->setVisible(isStereo);
+
+    if (isStereo) {
+        depthDock_->setVisible(true);
+        pointCloudDock_->setVisible(true);
+    }
+
+    if (isPose)
+        statusBar()->showMessage(Lang::s("pose_model_loaded"), 3000);
+    else
+        statusBar()->showMessage(Lang::s("detection_model_loaded"), 3000);
+
+    QString devText = thread_.detector().isGpuEnabled()
+        ? Lang::s("device_gpu") : Lang::s("device_cpu");
+    if (isPose) devText += " | Pose";
+    if (isStereo) devText += " | Stereo";
+    deviceLabel_->setText(devText);
 }
 
 void MainWindow::onClearStats()
@@ -1052,6 +1461,11 @@ void MainWindow::refreshUIText()
     trackingBtn_->setText(trackingBtn_->isChecked() ? Lang::s("tracking_on") : Lang::s("tracking_off"));
     trajectoryBtn_->setText(trajectoryBtn_->isChecked() ? Lang::s("trajectory_on") : Lang::s("trajectory_off"));
     speedBtn_->setText(speedBtn_->isChecked() ? Lang::s("speed_on") : Lang::s("speed_off"));
+    skeletonBtn_->setText(skeletonBtn_->isChecked() ? Lang::s("skeleton_on") : Lang::s("skeleton_off"));
+    stereoBtn_->setText(stereoBtn_->isChecked() ? Lang::s("stereo_on") : Lang::s("stereo_off"));
+    calibrateBtn_->setText(Lang::s("calibration"));
+    depthOverlayBtn_->setText(depthOverlayBtn_->isChecked() ? Lang::s("depth_overlay_on") : Lang::s("depth_overlay_off"));
+    stereoSettingsBtn_->setText(Lang::s("stereo_settings"));
     countLineBtn_->setText(Lang::s("draw_line"));
     clearLineBtn_->setText(Lang::s("clear_line"));
     langBtn_->setText(Lang::s("lang_toggle"));
@@ -1073,6 +1487,10 @@ void MainWindow::refreshUIText()
     trackingBtn_->setToolTip(Lang::s("tip_tracking"));
     trajectoryBtn_->setToolTip(Lang::s("tip_trajectory"));
     speedBtn_->setToolTip(Lang::s("tip_speed"));
+    skeletonBtn_->setToolTip(Lang::s("tip_skeleton"));
+    stereoBtn_->setToolTip(Lang::s("tip_stereo"));
+    calibrateBtn_->setToolTip(Lang::s("tip_calibrate"));
+    depthOverlayBtn_->setToolTip(Lang::s("tip_depth_overlay"));
     countLineBtn_->setToolTip(Lang::s("tip_draw_line"));
     clearLineBtn_->setToolTip(Lang::s("tip_clear_line"));
     langBtn_->setToolTip(Lang::s("tip_lang"));
@@ -1086,6 +1504,16 @@ void MainWindow::refreshUIText()
     countingDock_->setWindowTitle(Lang::s("crossing_count"));
     countingTable_->setHorizontalHeaderLabels(
         {Lang::s("stats_class"), Lang::s("forward"), Lang::s("reverse"), Lang::s("total")});
+
+    poseDock_->setWindowTitle(Lang::s("pose_title"));
+    poseTable_->setHorizontalHeaderLabels(
+        {Lang::s("pose_keypoint"), Lang::s("pose_position"), Lang::s("pose_confidence")});
+
+    depthDock_->setWindowTitle(Lang::s("depth_dock"));
+    depthTable_->setHorizontalHeaderLabels(
+        {Lang::s("depth_track_id"), Lang::s("depth_class"),
+         Lang::s("depth_dist"), Lang::s("depth_conf")});
+    pointCloudDock_->setWindowTitle(Lang::s("point_cloud_dock"));
 
     // Refresh camera combo
     int curCam = cameraCombo_->currentData().toInt();

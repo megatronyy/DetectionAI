@@ -19,6 +19,24 @@ const std::vector<std::string> YOLODetector::CLASS_NAMES = {
     "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
 };
 
+const std::vector<std::string> YOLODetector::KEYPOINT_NAMES = {
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle"
+};
+
+const std::vector<std::pair<int,int>> YOLODetector::SKELETON_CONNECTIONS = {
+    {0,1}, {0,2}, {1,3}, {2,4},
+    {5,6},
+    {5,7}, {7,9},
+    {6,8}, {8,10},
+    {5,11}, {6,12},
+    {11,12},
+    {11,13}, {13,15},
+    {12,14}, {14,16}
+};
+
 YOLODetector::YOLODetector()
     : env_(ORT_LOGGING_LEVEL_WARNING, "YOLO11")
     , memInfo_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
@@ -63,6 +81,23 @@ bool YOLODetector::loadModel(const std::wstring& modelPath, int threads)
         for (size_t i = 0; i < outputNames_.size(); i++)
             outNamesC_[i] = outputNames_[i].c_str();
 
+        // Auto-detect model type from output tensor shape
+        {
+            auto outTypeInfo = session_.GetOutputTypeInfo(0);
+            const auto& tensorInfo = outTypeInfo.GetTensorTypeAndShapeInfo();
+            auto outShape = tensorInfo.GetShape();
+            int odim1 = (int)outShape[1], odim2 = (int)outShape[2];
+            int ochannels = (odim1 < odim2) ? odim1 : odim2;
+            int kpCount = (ochannels - 5) / 3;
+            if (ochannels > 5 && (ochannels - 5) % 3 == 0 && kpCount > 0) {
+                modelType_ = ModelType::Pose;
+                numKeypoints_ = kpCount;
+            } else {
+                modelType_ = ModelType::Detection;
+                numKeypoints_ = 0;
+            }
+        }
+
         // Pre-allocate input buffer (3 channels * 640 * 640)
         inputBuf_.resize(3 * inputW_ * inputH_);
 
@@ -70,6 +105,8 @@ bool YOLODetector::loadModel(const std::wstring& modelPath, int threads)
         return true;
     } catch (...) {
         loaded_ = false;
+        modelType_ = ModelType::Detection;
+        numKeypoints_ = 0;
         return false;
     }
 }
@@ -170,37 +207,15 @@ std::vector<Detection> YOLODetector::postprocess(
 
     for (int i = 0; i < numBoxes; i++) {
         float bx, by, bw, bh;
-        float conf = 0;
-        int cls = 0;
 
         if (transposed) {
             bx = data[0 * numBoxes + i];
             by = data[1 * numBoxes + i];
             bw = data[2 * numBoxes + i];
             bh = data[3 * numBoxes + i];
-            for (int j = 4; j < channels; j++) {
-                if (data[j * numBoxes + i] > conf) {
-                    conf = data[j * numBoxes + i];
-                    cls = j - 4;
-                }
-            }
         } else {
             float* ptr = data + i * channels;
             bx = ptr[0]; by = ptr[1]; bw = ptr[2]; bh = ptr[3];
-            for (int j = 4; j < channels; j++) {
-                if (ptr[j] > conf) {
-                    conf = ptr[j];
-                    cls = j - 4;
-                }
-            }
-        }
-
-        if (conf < confThreshold_) continue;
-
-        {
-            std::lock_guard<std::mutex> lock(filterMutex_);
-            if (!enabledClasses_.empty() && !enabledClasses_.contains(cls))
-                continue;
         }
 
         int x1 = (int)((bx - bw / 2 - padX_) / scaleX_);
@@ -213,7 +228,53 @@ std::vector<Detection> YOLODetector::postprocess(
         x2 = std::max(0, std::min(x2, origW));
         y2 = std::max(0, std::min(y2, origH));
 
-        dets.push_back({cls, conf, cv::Rect(x1, y1, x2 - x1, y2 - y1)});
+        if (modelType_ == ModelType::Pose) {
+            float objConf = transposed ? data[4 * numBoxes + i]
+                                       : (data + i * channels)[4];
+            if (objConf < confThreshold_) continue;
+
+            std::vector<Keypoint> kps;
+            kps.reserve(numKeypoints_);
+            for (int k = 0; k < numKeypoints_; k++) {
+                float kx, ky, kc;
+                if (transposed) {
+                    kx = data[(5 + k*3)     * numBoxes + i];
+                    ky = data[(5 + k*3 + 1) * numBoxes + i];
+                    kc = data[(5 + k*3 + 2) * numBoxes + i];
+                } else {
+                    float* ptr = data + i * channels;
+                    kx = ptr[5 + k*3];
+                    ky = ptr[5 + k*3 + 1];
+                    kc = ptr[5 + k*3 + 2];
+                }
+                kps.push_back({cv::Point2f((kx - padX_) / scaleX_, (ky - padY_) / scaleY_), kc});
+            }
+            dets.push_back({0, objConf, cv::Rect(x1, y1, x2 - x1, y2 - y1), kps});
+        } else {
+            float conf = 0;
+            int cls = 0;
+            if (transposed) {
+                for (int j = 4; j < channels; j++) {
+                    if (data[j * numBoxes + i] > conf) {
+                        conf = data[j * numBoxes + i];
+                        cls = j - 4;
+                    }
+                }
+            } else {
+                float* ptr = data + i * channels;
+                for (int j = 4; j < channels; j++) {
+                    if (ptr[j] > conf) { conf = ptr[j]; cls = j - 4; }
+                }
+            }
+            if (conf < confThreshold_) continue;
+
+            {
+                std::lock_guard<std::mutex> lock(filterMutex_);
+                if (!enabledClasses_.empty() && !enabledClasses_.contains(cls))
+                    continue;
+            }
+            dets.push_back({cls, conf, cv::Rect(x1, y1, x2 - x1, y2 - y1)});
+        }
     }
 
     return nms(dets, iouThreshold_);
@@ -253,3 +314,6 @@ QSet<int> YOLODetector::enabledClasses() const {
 
 bool YOLODetector::isGpuEnabled() const { return gpuEnabled_; }
 bool YOLODetector::isLoaded() const { return loaded_; }
+ModelType YOLODetector::modelType() const { return modelType_; }
+bool YOLODetector::isPoseModel() const { return modelType_ == ModelType::Pose; }
+int YOLODetector::numKeypoints() const { return numKeypoints_; }
